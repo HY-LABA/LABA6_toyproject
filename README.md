@@ -18,6 +18,30 @@ LABA6기 부트캠프 ToyProject: 사람이 던진 쓰레기의 낙하 궤적을
 
 ### 하드웨어 연결 구조
 
+![하드웨어 아키텍처]
+
+> 범례: 파란선 = 신호 버스, 빨간선 = 전력 버스
+
+**전원부**
+- LiPo(3S, 18650/21700) + 저전압 알람 → 60A 퓨즈 → PDB(전원 분배 보드)
+- PDB → VCC/GND OUT ×3 → 모터드라이버(BTS7960) D1·D2·D3 → 모터 M1·M2·M3
+- UPS HAT(18650, 5V/5A) → Raspberry Pi 5 전원 공급 (예상 구동시간: 미정)
+
+**제어부**
+- Raspberry Pi 5
+  - CSI 카메라 인터페이스(CAM0/CAM1) → AF-68(2MP) 카메라 모듈
+  - GPIO/PCIe → AI HAT+ (Hailo)
+  - USB-A ↔ USB-B, GND 공유로 Pico와 시리얼 연결
+- Pico
+  - GPIO(GPI0~GPI4)로 모터드라이버(BTS7960) ×3에 RPWM/LPWM/R_IS/L_IS/R_EN/L_EN 신호 전달
+  - 모터 엔코더 피드백 수신 (엔코더 전원 배선 별도 구성)
+  - PDB로부터 3.3V 전원 공급
+
+**모터드라이버(BTS7960, ×3) 상세**
+- 입력: RPWM, LPWM, R_IS, L_IS, R_EN, L_EN (Pico 신호)
+- 출력: VCC(B+), GND(B-), OUT1, OUT2 → 모터 연결
+- 모터(M) 측: EN-GND, EN-VCC, A상/B상 (엔코더 채널)
+
 
 ## 소프트웨어 파이프라인
 
