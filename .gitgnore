@@ -1,1 +1,29 @@
+# Python 기본
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
 
+# 학습된 모델 파일 (용량 크고 코드 아님)
+*.pt
+*.hef
+
+# 카메라 촬영/캘리브레이션 데이터
+/data/
+/frames/
+*.jpg
+*.jpeg
+*.mp4
+
+# 아두이노/피코 빌드 산출물
+*.hex
+build/
+
+# 개인 환경설정 (Wi-Fi 정보 등 민감정보)
+config.local.py
+.env
+
+# OS 잡파일
+.DS_Store
+Thumbs.db
