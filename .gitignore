@@ -27,3 +27,6 @@ config.local.py
 # OS 잡파일
 .DS_Store
 Thumbs.db
+
+# 작업 노트 (비공개, 팀 공유 안 함)
+NOTES.md
