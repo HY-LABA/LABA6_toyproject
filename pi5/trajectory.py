@@ -39,4 +39,6 @@ def predict_landing(position, velocity, g, z_catch):
     return np.array([x0 + vx * t_land, y0 + vy * t_land, z_catch]), t_land, True
 
 
-# TODO: 재보정 — 엔코더 이동량 + 카메라 재관측 오차 반영해 궤적 재계산 (architecture.md)
+def recalibrate(odometry, reobs, previous_landing_point):
+    """엔코더 이동량 + 카메라 재관측 오차 반영해 궤적 재계산 -> (landing_point, time_to_land, z)."""
+    raise NotImplementedError  # 정해야함: 설계 안 됨

@@ -1,10 +1,5 @@
 """3D 등가속(중력) 칼만 필터 — 포물선 운동용.
-
-상태 x = [px, py, pz, vx, vy, vz]  (위치 m, 속도 m/s)
-- 운동 모델: 등속 + 중력(g)을 알려진 제어입력으로 z축 속도에 반영
-- 측정: 위치 (px, py, pz)
-
-의존성: numpy 뿐 (독립 실행 가능).
+`trajectory.recalibrate()` 정의 시 사용 예정 
 """
 
 from __future__ import annotations

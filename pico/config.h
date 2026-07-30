@@ -1,58 +1,52 @@
-// 핀 배치, 로봇 물리 상수, PID 게인 초기값 (architecture.md 참고)
-//
-// 부품 구매 전이라 모터별 핀 번호 / PID 게인은 전부 placeholder(-1, 임시값)이다.
-// 모터 3개를 항상 배열(인덱스 0,1,2)로 다뤄서, 나중에 실측값이 모터마다 달라져도
-// 숫자만 채우면 되게 구조를 잡아둔다 (kinematics.c의 WHEEL_ANGLES[3]와 같은 패턴).
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <math.h>
+
 #define NUM_MOTORS 3
 
-// ── GPIO 핀 배치 (모터별) ─────────────────────────────────
-// TODO: 부품 구매·배선 후 실제 핀 번호로 교체.
 typedef struct {
     int rpwm;
     int lpwm;
-    int r_en;
-    int l_en;
+    int en;  // R_EN, L_EN 공통
     int enc_a;
     int enc_b;
 } MotorPins;
 
 static const MotorPins MOTOR_PINS[NUM_MOTORS] = {
-    {-1, -1, -1, -1, -1, -1},  // TODO: 모터 0
-    {-1, -1, -1, -1, -1, -1},  // TODO: 모터 1
-    {-1, -1, -1, -1, -1, -1},  // TODO: 모터 2
+    {-1, -1, -1, -1, -1},  // 정해야함
+    {-1, -1, -1, -1, -1},  // 정해야함
+    {-1, -1, -1, -1, -1},  // 정해야함
 };
 
-// ── UART (파이5 <-> 피코) ────────────────────────────────
-#define UART_TX_PIN -1       // TODO
-#define UART_RX_PIN -1       // TODO
-#define UART_BAUDRATE 115200 // ❓ pi5 쪽 config.py의 SERIAL_BAUDRATE와 반드시 일치해야 함
+// 파이5 통신: USB CDC (하드웨어 UART 핀 아님)
 
-// ── 로봇 물리 상수 (README 기준, 이미 정해진 값) ─────────
-#define WHEEL_DIAMETER_M 0.100f  // 100mm 옴니휠
-#define GEAR_RATIO 34.0f         // 34:1
-#define MOTOR_RATED_RPM 350.0f   // FIT0493 정격 RPM
+#define WHEEL_DIAMETER_M 0.100f
+#define GEAR_RATIO 34.0f
+#define MOTOR_RATED_RPM 350.0f
 
-// TODO: 엔코더 실물 스펙 확인 후 (홀센서 1회전당 펄스 수, 모터축 기준인지 출력축 기준인지도 확인)
-#define ENCODER_COUNTS_PER_REV -1
+// 바퀴 장착각(rad, 120도 간격 이상값) — 정해야함: 실제 조립 후 자/각도기로 재측정
+static const float WHEEL_ANGLES_RAD[NUM_MOTORS] = {
+    (float)(M_PI * 0.5),
+    (float)(M_PI * 7.0 / 6.0),
+    (float)(M_PI * 11.0 / 6.0),
+};
+#define WHEEL_MOUNT_RADIUS_M 0.15f  // 중심-바퀴 거리(m) — 정해야함: 실측
 
-// ── 제어 주기 ─────────────────────────────────────────────
-#define CONTROL_PERIOD_MS 1  // architecture.md 예시값. 실측하면서 조정 가능
+#define ENCODER_COUNTS_PER_REV -1  // 정해야함
 
-// ── PID 게인 (모터별, 실측 전 임시로 전부 동일값) ─────────
+#define CONTROL_PERIOD_MS 1
+
 typedef struct {
     float kp;
     float ki;
     float kd;
 } PidGains;
 
-// TODO: 모터 개체차로 인해 실측하면 모터마다 값이 달라질 수 있음. 지금은 동일 placeholder.
 static const PidGains MOTOR_PID[NUM_MOTORS] = {
-    {1.0f, 0.0f, 0.0f},  // 모터 0
-    {1.0f, 0.0f, 0.0f},  // 모터 1
-    {1.0f, 0.0f, 0.0f},  // 모터 2
+    {1.0f, 0.0f, 0.0f},  // 정해야함
+    {1.0f, 0.0f, 0.0f},  // 정해야함
+    {1.0f, 0.0f, 0.0f},  // 정해야함
 };
 
 #endif  // CONFIG_H

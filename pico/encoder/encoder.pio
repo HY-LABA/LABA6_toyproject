@@ -1,0 +1,27 @@
+; 1x 쿼드러처 디코딩: A상 상승엣지만 카운트, 그 순간 B상 레벨로 방향 판단.
+; in 핀 = A상(상대 0번), jmp 핀 = B상 (C 쪽에서 sm_config_set_in_pins/set_jmp_pin으로 지정).
+; X 레지스터 = 누적 카운트. PIO에는 덧셈 명령이 없어서 증가는 "반전->감소->반전" 트릭 사용.
+
+.program quadrature_1x
+
+.wrap_target
+start:
+    wait 0 pin 0
+    wait 1 pin 0        ; A 상승엣지
+    jmp pin decrement   ; 이 순간 B가 high면 감소 방향
+
+increment:
+    mov x, ~x
+    jmp x--, inc2
+inc2:
+    mov x, ~x
+    jmp push_count
+
+decrement:
+    jmp x--, dec2
+dec2:
+
+push_count:
+    mov isr, x
+    push noblock
+.wrap
