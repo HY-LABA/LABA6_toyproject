@@ -3,7 +3,7 @@
 파이5가 하는 일은 하나다. **"어디로, 얼마나 빨리 가야 하는가"를 결정한다.**
 모터를 어떻게 돌릴지는 [피코](pico-control.md)가 맡는다.
 
-관련 문서: [물리 계산](physics.md) · [하드웨어](hardware.md) · [통신 프로토콜](protocol.md)
+관련 문서: [비전 파이프라인](vision-pipeline.md) · [물리 계산](physics.md) · [하드웨어](hardware.md) · [통신 프로토콜](protocol.md)
 
 ---
 
@@ -129,59 +129,111 @@ HQ 카메라는 **롤링 셔터**라 행마다 노출 시각이 다르다. 낙�
 
 ## 4. 메인 루프
 
+### 4.1 상태 기계
+
+루프는 두 상태를 오간다. **탐색은 물체를 찾고, 추적은 정밀하게 따라간다.**
+
+```
+        ┌──────────────────────────────────────────┐
+        │                                          │
+        ▼                                          │
+   ┌─────────┐   대상 클래스 검출    ┌──────────┐   │ 착지 / 소실 / 타임아웃
+   │ SEARCH  │ ────────────────────▶│  TRACK   │───┘   (정지 명령 후 복귀)
+   │ 전체프레임 │                     │ ROI 크롭  │
+   │ 640 축소 │ ◀────────────────────│  네이티브  │
+   └─────────┘   ROI에서 검출 실패     └──────────┘
+                 (칼만 상태는 유지)
+```
+
+**왜 두 상태인가:** 전체 프레임을 640으로 줄여 추론하면 bbox가 20 px로 작아져 σ_z가
+19.8 cm까지 나빠진다. ROI 크롭은 네이티브 해상도를 유지해 bbox 64 px, σ_z 6.3 cm를 지킨다
+([vision-pipeline.md 2장](vision-pipeline.md#2--추론-해상도가-z-정확도를-3배-좌우한다)).
+
+SEARCH의 부정확한 첫 관측은 문제되지 않는다. 칼만필터가 어차피 큰 불확실성으로 시작하고,
+2~3프레임 뒤 TRACK으로 넘어가면서 정밀도가 확보된다.
+
+### 4.2 루프
+
 ```python
-def run():
-    cam  = vision.Camera(...)
-    link = communication.SerialLink()
-    est  = estimator.ProjectileEstimator(...)
+def run(cam, link, est, clock):
+    state = State.SEARCH
 
     while True:
-        frame, t_cap = cam.capture()                      # 40 Hz
-        det = vision.detect_best(frame)                   # YOLO (Hailo)
+        frame, t_cap = cam.capture()                       # 40 Hz
+        pose = link.latest_odometry()                      # drain-to-latest
+
+        # ── 관측 ────────────────────────────────────────
+        if state is State.SEARCH:
+            det = vision.detect_full(frame)                # 640 리사이즈
+        else:
+            uv = est.predict_image_position(t_cap, pose)   # 칼만 → 이미지 좌표
+            det = vision.detect_roi(frame, uv)             # 640 네이티브 크롭
+            if det is None:
+                state = State.SEARCH                       # 재획득 (est는 유지)
+                continue
 
         if det is None:
-            if est.stale(t_cap): est.reset()              # 소실 → 초기화
             continue
 
-        p_body  = vision.to_body_xyz(det)                 # 2.3, 2.4절
-        pose    = link.latest_odometry()                  # drain-to-latest
-        p_world = frames.body_to_world(p_body, pose)      # 2.2절
+        # ── 추정 ────────────────────────────────────────
+        p_body  = vision.to_body_xyz(det)                  # 2.3, 2.4절
+        p_world = frames.body_to_world(p_body, pose)       # 2.2절
+        est.update(p_world, t_cap, det)                    # 5절
+        state = State.TRACK
 
-        est.update(p_world, t_cap, det)                   # 5절
-
-        if not est.confident:                             # 공분산 임계 미달
+        # ── 예측 · 명령 ──────────────────────────────────
+        if not est.confident:
             continue
-
         land, t_land, ok = trajectory.predict_landing(est.state, ...)
         if not ok:
             continue
+        link.send(control.to_velocity_command(land, t_land, pose, est.confidence))
 
-        cmd = control.to_velocity_command(land, t_land, pose, est.confidence)
-        link.send(cmd)                                    # 7절
-
-        if est.z <= config.Z_CATCH:
-            break                                          # 착지
+        # ── 종료 판정 ────────────────────────────────────
+        if (reason := termination_reason(est, t_cap, clock)) is not None:
+            link.send(control.stop_command())
+            utils.log(f"cycle end: {reason}")
+            est.reset()
+            state = State.SEARCH                           # 다음 물체 대기
 ```
 
 **한 번의 반복이 관측·추정·예측·명령을 모두 한다.** 별도의 "확정 단계"도 "재보정 루프"도
 없다. 코드가 줄고, 지연이 줄고, 정확도가 오른다.
 
-### 종료 조건
+### 4.3 종료 조건
 
-| 조건 | 의미 |
-|---|---|
-| `z ≤ Z_CATCH` | 착지 (정상 종료) |
-| 관측 소실 후 `LOST_TIMEOUT_S` 경과 | 물체를 놓침 |
-| 사이클 경과 `CYCLE_TIMEOUT_S` 초과 | 무한 루프 방지 |
+| 조건 | 의미 | 후속 |
+|---|---|---|
+| `est.z ≤ Z_CATCH` | 착지 (정상 종료) | 정지 → SEARCH |
+| 관측 소실 후 `LOST_TIMEOUT_S` 경과 | 물체를 놓침 | 정지 → SEARCH |
+| 사이클 경과 `CYCLE_TIMEOUT_S` 초과 | 무한 루프 방지 | 정지 → SEARCH |
 
-뒤의 둘은 기존 설계에 없던 안전장치다. 어느 경우든 정지 명령을 보내고 종료한다.
+뒤의 둘은 기존 설계에 없던 안전장치다. **어느 경우든 정지 명령을 보내고 SEARCH로 돌아간다** —
+`break`로 프로그램을 끝내지 않으므로 연속 캐치가 자연스럽게 동작한다.
+
+성공/실패는 판정하지 않는다 (범위 밖).
+
+### 4.4 타이밍 예산 (프레임당 25 ms)
+
+| 단계 | 예산 | 비고 |
+|---|---|---|
+| 캡처 (Picamera2) | ~5 ms | 40 fps = 25 ms 주기 |
+| ROI 크롭 + 전처리 | ~2 ms | numpy 슬라이스 |
+| Hailo 추론 | ~10 ms | YOLO11n @ 640 |
+| 후처리 (NMS, 좌표 역변환) | ~1 ms | |
+| 좌표 변환 + 칼만 + 제어 | ~2 ms | 6×6 행렬, 무시할 수준 |
+| 시리얼 송수신 | ~1 ms | |
+| **합계** | **~21 ms** | 25 ms 안에 들어옴 |
+
+여유가 4 ms뿐이다. **추론이 10 ms를 넘으면 프레임을 거르게 되므로 Phase 4에서 조기 측정한다**
+([vision-pipeline.md 7장](vision-pipeline.md#7-검증-지표)).
 
 ---
 
 ## 5. 궤적 추정기 (ProjectileEstimator)
 
 [`pi/kalman.py`](../pi/kalman.py)의 `ProjectileKalman`을 `pi5/estimator.py`로 이식하고
-아래 3가지를 개선한다.
+아래 4가지를 개선한다.
 
 - **상태:** `[X, Y, Z, VX, VY, VZ]` (world frame, 6차원)
 - **예측 모델:** 포물선 운동 — 가속도 `(0, 0, −g_eff)`, `g_eff`는 클래스별
@@ -221,6 +273,22 @@ q를 키우면 필터가 최신 관측을 더 신뢰하게 되어 모델 편향�
 명령을 내지 않는다.
 
 **confident 판정:** 속도 공분산의 trace가 임계 이하일 때. 대략 3프레임이면 통과한다.
+
+### 개선 4 — ROI 중심 예측
+
+추적 단계가 크롭 위치를 알아야 하므로, 다음 프레임의 **이미지 좌표**를 내주는 메서드가
+필요하다. world 상태를 현재 로봇 자세로 body에 되돌린 뒤 핀홀 정투영한다.
+
+```python
+def predict_image_position(self, t: float, pose) -> tuple[float, float]:
+    p_world = self.predict_state(t)[:3]          # 등가속 외삽
+    x, y, z = frames.world_to_body(p_world, pose)
+    u = u0 + x * f_px / z
+    v = v0 - y * f_px / z                        # v축 부호 반전
+    return u, v
+```
+
+크롭이 프레임 경계를 벗어나면 안쪽으로 밀어 넣는다 (clamp).
 
 ---
 
@@ -290,7 +358,7 @@ guidance)가 된다. 궤적을 미리 계획할 필요가 없다. 정교한 가�
 pi5/
 ├── main.py            # 연속 추정 루프 (4절)
 ├── config.py          # 전 파라미터
-├── vision.py          # 캡처 + YOLO + 픽셀→body 좌표
+├── vision.py          # 캡처 + YOLO(detect_full/detect_roi) + 픽셀→body 좌표
 ├── frames.py          # ★신규  body ↔ world 변환
 ├── estimator.py       # ★신규  포물선 칼만필터 (pi/kalman.py 이식)
 ├── trajectory.py      # 착지 예측 (recalibrate 삭제)
@@ -305,11 +373,11 @@ pi5/
 
 | 파일 | 책임 | 의존 |
 |---|---|---|
-| `main.py` | 루프 오케스트레이션, 종료 조건 판정 | 전부 |
+| `main.py` | 상태 기계(SEARCH/TRACK), 루프 오케스트레이션, 종료 판정 | 전부 |
 | `config.py` | 모든 파라미터. **다른 파일에 상수 하드코딩 금지** | 없음 |
-| `vision.py` | 프레임 → `Detection` → `body_xyz` | config |
+| `vision.py` | 프레임 → `Detection` → `body_xyz`. ROI 크롭·좌표 역변환을 내부에서 끝낸다 | config |
 | `frames.py` | 순수 좌표 변환 함수. 상태 없음 | 없음 |
-| `estimator.py` | 관측 누적 → 궤적 상태. **유일한 상태 보유자** | config |
+| `estimator.py` | 관측 누적 → 궤적 상태 + ROI 중심 예측. **유일한 상태 보유자** | config, frames |
 | `trajectory.py` | 상태 → 착지점/착지시각. 순수 함수 | config |
 | `control.py` | 착지점 + 자세 → 속도 명령. 순수 함수 | config |
 | `communication.py` | 시리얼 I/O + 프레임 인코딩 | config |
@@ -326,10 +394,11 @@ pi5/
 
 | 파일 | 변경 | 이유 |
 |---|---|---|
-| `main.py` | **재작성** — 2단계 → 연속 루프 | 3절 |
-| `vision.py` | 주점 보정, y축 부호, z 계산식 변경, 속도 계산 제거 | 2.3, 2.4절 |
+| `main.py` | **재작성** — 2단계 → 연속 루프 + SEARCH/TRACK 상태 기계 | 3, 4절 |
+| `vision.py` | 주점 보정, y축 부호, z는 bbox 폭 기준, 속도 계산 제거,
+  **`detect_full`/`detect_roi` 2단계 추론** | 2.3, 2.4절 · [vision-pipeline](vision-pipeline.md) |
 | `trajectory.py` | `recalibrate()` **삭제**, `predict_landing` 유지 | 3절 |
-| `estimator.py` | **신규** — `pi/kalman.py` 이식 + R/q/초기화 개선 | 5절 |
+| `estimator.py` | **신규** — `pi/kalman.py` 이식 + R/q/초기화/ROI예측 개선 | 5절 |
 | `frames.py` | **신규** — body ↔ world 변환 | 2.2절 |
 | `control.py` | 목표좌표 → **목표 속도** 산출로 변경, 도달가능성 판정 추가 | 7절 |
 | `communication.py` | 페이로드 의미 변경, 타임스탬프, drain-to-latest | [protocol.md](protocol.md) |
@@ -358,10 +427,11 @@ pi5/
 
 | 값 | 임시값 | 확정 시점 |
 |---|---|---|
-| `V_MAX` | 1.70 m/s | 무부하 속도 실측 |
+| `V_MAX` | 1.22 m/s | 무부하 속도 실측 |
 | `A_MAX` | 2.45 m/s² (μ=0.5 견인한계) | **마찰계수 μ 실측** — 캐치 반경을 좌우한다 |
 | `CAMERA_FPS` | 40 (2028×1520 모드) | 확정 |
-| `SIGMA_BBOX_PX` (σ_w, σ_u) | 2 px | 정지 물체 촬영 통계 |
+| `SIGMA_BBOX_PX` (σ_w, σ_u) | 2 px | 정지 물체 촬영 통계 ([vision-pipeline.md 7장](vision-pipeline.md#7-검증-지표)) |
+| `ROI_SIZE_PX` | 640 (추론 입력과 일치) | 확정 |
 | `SIGMA_ODOM_M` | 미정 | 오도메트리 드리프트 측정 |
 | `PROCESS_NOISE_BY_CLASS` | 미정 | 시뮬레이터 + 실측 튜닝 |
 | `T_MIN` | 0.08 s | 시뮬레이터 |
@@ -374,7 +444,7 @@ pi5/
 
 | 값 | 비고 |
 |---|---|
-| `YOLO_MODEL_PATH` | 학습 완료 후 `.hef` 경로 |
+| `YOLO_MODEL_PATH` | YOLO11n 학습 → Hailo 컴파일 후 `.hef` 경로 ([vision-pipeline.md](vision-pipeline.md)) |
 | `SERIAL_PORT` | 피코 연결 후 확인 (`/dev/ttyACM0` 등) |
 
 ### 구현이 필요한 연동 코드
