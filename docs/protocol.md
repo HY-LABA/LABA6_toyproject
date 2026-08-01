@@ -3,7 +3,8 @@
 **양쪽이 반드시 일치해야 하는 계약이다.** 그래서 파이5 문서에도 피코 문서에도 넣지 않고
 따로 뒀다. 한쪽만 고치면 조용히 깨진다.
 
-구현: [`pi5/communication.py`](../pi5/communication.py) ↔ [`pico/communication.c`](../pico/communication.c)
+구현: [`catcher/protocol.py`](../catcher/protocol.py) + [`catcher/link.py`](../catcher/link.py)
+↔ [`pico/communication.c`](../pico/communication.c)
 
 관련 문서: [파이5 알고리즘](pi5-algorithm.md) · [피코 제어](pico-control.md)
 
@@ -81,7 +82,7 @@ target_vx = cmd.valid ? cmd.cmd_vx : 0.0f;
 **이게 유일한 안전장치다.** 파이5가 죽거나, USB가 빠지거나, 프로그램이 멈춰도 로봇은
 0.1초 안에 정지한다. TTL이 없으면 마지막 명령대로 계속 달린다.
 
-TTL은 파이5 루프 주기(25 ms @ 40 fps)의 3~4배 정도로 잡는다. 너무 짧으면 프레임 하나만 늦어도 끊기고,
+TTL은 파이5 루프 주기(16.7 ms @ 60 fps)의 3~6배 정도로 잡는다. 너무 짧으면 프레임 하나만 늦어도 끊기고,
 너무 길면 워치독 의미가 없다.
 
 ---
@@ -99,7 +100,7 @@ TTL은 파이5 루프 주기(25 ms @ 40 fps)의 3~4배 정도로 잡는다. 너�
 ### 대책 (둘 다 적용)
 
 **1. 피코 송신 주기를 100 Hz로 낮춘다.** 제어 루프는 1 kHz를 유지하고, 10 사이클마다 한 번만
-송신한다. 대역폭이 2.8 KB/s로 떨어진다. 파이5는 40 Hz로 읽으므로 100 Hz면 충분하다.
+송신한다. 대역폭이 2.8 KB/s로 떨어진다. 파이5는 30~60 Hz로 읽으므로 100 Hz면 충분하다.
 
 **2. 파이5는 입력 버퍼를 비우고 마지막 완전한 프레임만 쓴다** (`latest_odometry()`).
 쌓인 프레임은 어차피 낡은 정보다.
@@ -144,10 +145,10 @@ def latest_odometry(self):
 
 ## 6. 디버깅
 
-[`communication.py`](../pi5/communication.py)에 `debug_decode(raw: bytes) -> str`가 있다.
+[`catcher/protocol.py`](../catcher/protocol.py)에 `debug_decode(raw: bytes) -> str`가 있다.
 raw 바이트를 사람이 읽는 텍스트로 바꾼다. 페이로드 길이로 방향을 구분한다.
 
 ```
-$ cat /dev/ttyACM0 | python -m communication
+$ cat /dev/ttyACM0 | python -m protocol
 [odometry] t=1234 x=0.031 y=-0.002 theta=0.001 vx=0.42 vy=0.00 omega=0.00
 ```
