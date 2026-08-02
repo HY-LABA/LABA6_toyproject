@@ -12,7 +12,7 @@
 ## 큰 틀 — 4단계
 
 ```
-  ①  객체 인식        YOLO11n        →  Detection(class, bbox, conf)
+  ①  객체 인식        YOLOv8n        →  Detection(class, bbox, conf)
   ②  좌표 변환        핀홀 + 오도메트리 →  world (X, Y, Z)
   ③  궤적 추정        포물선 칼만필터   →  [X, Y, Z, VX, VY, VZ]
   ④  목표 지점        착지 예측        →  VelocityCommand(vx, vy, ttl)

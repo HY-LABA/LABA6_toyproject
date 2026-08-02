@@ -90,9 +90,7 @@ Z는 회전 영향이 없으므로 `Z_W = Z_B` (로봇이 기울지 않는다는
 
 ### 2.4 z 추정 — 실물 치수 기반
 
-현재 코드는 "1 m 거리에서의 bbox 픽셀 크기" DB(`REFERENCE_SIZE_AT_1M`)를 쓴다. 이 방식은
-렌즈나 해상도를 바꾸면 DB 전체를 다시 실측해야 한다. **실물 치수(m)를 넣고 f_px로 계산하는
-방식으로 바꾼다:**
+현재 코드는 "1 m 거리에서의 bbox 픽셀 크기" DB(`REFERENCE_SIZE_AT_1M`)를 쓴다. 이 방식은 렌즈나 해상도를 바꾸면 DB 전체를 다시 실측해야 한다. **실물 치수(m)를 넣고 f_px로 계산하는 방식으로 바꾼다:**
 
 ```
 R = f_px·cos(θ/2) × W_real / w_px     ← w_px 는 bbox '폭' (높이 아님)
@@ -252,7 +250,7 @@ def run(cam, link, est, clock):
 |---|---|---|
 | 캡처 (Picamera2) | ~3 ms | 1456×1088 |
 | ROI 크롭 + 전처리 | ~2 ms | numpy 슬라이스 |
-| Hailo 추론 | ~10 ms | YOLO11n @ 640 |
+| Hailo 추론 | ~10 ms | YOLOv8n @ 640 |
 | 후처리 (NMS, 좌표 역변환) | ~1 ms | |
 | 좌표 변환 + 칼만 + 제어 | ~2 ms | 6×6 행렬, 무시할 수준 |
 | 시리얼 송수신 | ~1 ms | |
@@ -482,7 +480,7 @@ pi5/
 
 | 값 | 비고 |
 |---|---|
-| `YOLO_MODEL_PATH` | YOLO11n 학습 → Hailo 컴파일 후 `.hef` 경로 ([vision-pipeline.md](vision-pipeline.md)) |
+| `YOLO_MODEL_PATH` | YOLOv8n 학습 → Hailo 컴파일 후 `.hef` 경로 ([vision-pipeline.md](vision-pipeline.md)) |
 | `SERIAL_PORT` | 피코 연결 후 확인 (`/dev/ttyACM0` 등) |
 
 ### 구현이 필요한 연동 코드

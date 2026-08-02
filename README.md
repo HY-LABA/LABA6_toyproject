@@ -9,7 +9,8 @@
 |---|---|
 | [physics.md](docs/physics.md) | **물리 계산** — 운동모델·마찰·캐치반경·통 크기·항력·광학. 모든 설계 상수의 근거 |
 | [hardware.md](docs/hardware.md) | **하드웨어** — 부품 구성, 통 설계, 전원, 장착 규약, 구매 체크리스트 |
-| [pi5-algorithm.md](docs/pi5-algorithm.md) | **파이5** — 좌표계, 궤적 추정, 착지 예측, 목표 속도 산출 |
+| [vision-pipeline.md](docs/vision-pipeline.md) | **비전** — 데이터셋·라벨링·YOLO 학습·Hailo 컴파일·ROI 추론 |
+| [pi5-algorithm.md](docs/pi5-algorithm.md) | **파이5** — 좌표계, 상태 기계, 궤적 추정, 착지 예측, 속도 산출 |
 | [pico-control.md](docs/pico-control.md) | **피코** — 실시간 루프, 기구학, 오도메트리, 모터 제어 |
 | [protocol.md](docs/protocol.md) | **통신** — 파이5 ↔ 피코 프레임 계약 (양쪽이 참조) |
 | [open-questions.md](docs/open-questions.md) | **생각해봐야 할 것** — 리스크, 미결정 사항 |
@@ -34,7 +35,7 @@
 아니라 통 안에만 들어오면 되기 때문이다
 ([physics.md 6장](docs/physics.md#6-통-입구-크기--설계의-지렛대)).
 
-> 병목은 모터가 아니라 **바닥 마찰**이다. 모터는 10.9 m/s²를 낼 수 있는데 마찰 한계가
+> 병목은 모터가 아니라 **바닥 마찰**이다. 모터는 16.3 m/s²를 낼 수 있는데 마찰 한계가
 > 2.45 m/s²다. 게다가 3륜 옴니는 힘 분배 제약 때문에 견인 한계가 `0.5·μ·g`로 단순 계산의
 > 절반이다 ([physics.md 2장](docs/physics.md#2-3륜-옴니의-힘-분배)).
 >
@@ -86,11 +87,15 @@ z(높이)는 **bbox 폭**과 실물 치수의 비로 추정한다. 단안 카메
 ## 코드 구조
 
 ```
+prep/    ★구동 전 준비 — 캘리브레이션, 데이터 수집(MOG2), YOLO 학습
 catcher/ 파이5 새 아키텍처 (Python) — 인식·좌표변환·궤적추정·목표속도
 pico/    라즈베리파이 피코 (C)  — 엔코더, 기구학, 오도메트리, PID 모터 제어
 docs/    설계 문서
 pi5/     구설계 코드 (참고용, 정리 대상)
 ```
+
+**`catcher/`를 돌리기 전에 `prep/`을 먼저 거쳐야 한다** — `config.py`의 카메라 파라미터와
+YOLO 가중치가 거기서 나온다. 실행 순서는 [prep/README.md](prep/README.md).
 
 `catcher/`의 순수 함수 모듈(frames·estimator·trajectory·control·protocol)은 하드웨어 없이
 동작·테스트된다. 구조는 [catcher/README.md](catcher/README.md).
@@ -109,13 +114,13 @@ pi5/     구설계 코드 (참고용, 정리 대상)
 ### Phase 0 — 시뮬레이터와 테스트 ★최우선 (하드웨어 불필요)
 
 1. `tests/` 구축: 기구학 왕복, 좌표 변환, 착지 예측, 프로토콜 인코딩/디코딩
-2. `pi5/sim/world.py`: 물체 낙하(중력 + 항력) + 로봇 운동(가속도 한계) 모델
-3. `pi5/sim/fake_camera.py`: 물체 world 좌표 → body 변환 → 핀홀 투영 → bbox 합성 + 노이즈 주입.
-   **YOLO를 흉내내는 게 아니라 YOLO의 출력을 흉내낸다**
-4. `pi5/sim/fake_link.py`: 피코 모델 (속도 명령 → 가감속 → 오도메트리)
-5. `main.py`가 진짜/가짜 구현을 **의존성 주입**으로 갈아끼울 수 있게 한다
+2. `catcher/sim/world.py`: 물체 낙하(중력 + 항력) + 로봇 운동(견인 한계) 모델
+3. `catcher/sim/fake_camera.py`: 물체 world 좌표 → body 변환 → **어안 투영** → bbox 합성 +
+   노이즈 주입. **YOLO를 흉내내는 게 아니라 YOLO의 출력(`Detection`)을 흉내낸다**
+4. `catcher/sim/fake_link.py`: 피코 모델 (속도 명령 → 가감속 → 오도메트리)
+5. `catcher/main.run()`이 진짜/가짜 구현을 **의존성 주입**으로 받도록 이미 되어 있다
 
-**완료 기준:** `python -m pi5.main --sim`이 끝까지 돌고 캐치 성공/실패를 출력한다.
+**완료 기준:** 시뮬레이터로 `main.run()`이 끝까지 돌고 캐치 성공/실패를 출력한다.
 
 ### Phase 1 — 알고리즘 검증 (하드웨어 불필요)
 
@@ -141,13 +146,21 @@ pi5/     구설계 코드 (참고용, 정리 대상)
 > 7단계의 **마찰계수 μ 실측**이 중요하다. 캐치 반경이 여기서 확정된다 (μ=0.4면 유효 41 cm,
 > μ=0.7이면 60 cm). 보증치 40 cm는 최악을 가정한 값이라 실측 후 상향할 수 있다.
 
-### Phase 4 — 비전 브링업
+### Phase 4 — 비전 파이프라인
 
-1. 카메라 캘리브레이션 → `f_px`, 주점, 왜곡계수
-2. 데이터셋 수집 + YOLO 학습 → Hailo `.hef` 컴파일
-3. 추론 지연 측정 → 오버헤드 0.12초 가정 검증
-4. 정지 물체로 z 추정 정확도 검증 (σ_z 실측)
-5. 낙하 영상 수집 → **클래스별 `g_eff` 피팅**
+**도구는 [`prep/`](prep/)에 이미 구현되어 있다.** 실행 순서는 [prep/README.md](prep/README.md).
+
+```
+check_setup → calibrate → capture_dataset(MOG2) → review_labels
+           → prepare_dataset → train_yolo → measure_sigma_w
+```
+
+> **합격 기준은 mAP가 아니라 σ_w ≤ 2 px다.** bbox 폭 오차가 그대로 거리 오차가 되기
+> 때문이다 ([vision-pipeline.md 7장](docs/vision-pipeline.md#7-검증-지표)).
+
+기본 CSI 카메라로 먼저 절차를 검증하고, 글로벌 셔터 카메라가 도착하면 **데이터 수집부터
+다시 한다** — 화각·왜곡·셔터가 달라 데이터가 재사용되지 않는다.
+낙하 영상은 학습 데이터이자 **클래스별 `g_eff` 피팅** 자료로 함께 쓴다.
 
 ### Phase 5 — 통합
 
@@ -162,15 +175,16 @@ pi5/     구설계 코드 (참고용, 정리 대상)
 
 ## 현재 상태
 
-**하드웨어 미구매 — 설계 단계.**
+**하드웨어 일부 구매 (카메라 도착 대기) — 설계 + 준비 단계.**
 
 기존 2단계 설계(확정 → 속도 3프레임 측정 → 예측 → 재보정 루프)는 3프레임 차분으로 구한
 vz의 오차가 6.5 m/s에 달해 원리적으로 동작하지 않는다는 것이 확인되어
 ([physics.md 8장](docs/physics.md#8-속도-추정-오차--설계를-바꾼-계산)),
 **연속 추정 루프로 재설계**했다.
 
-현재 코드는 이전 설계를 따르고 있어 재작성이 필요하다. 변경 범위는
-[pi5-algorithm.md 9장](docs/pi5-algorithm.md#9-현재-코드-대비-변경점) ·
-[pico-control.md 8장](docs/pico-control.md#8-현재-코드-대비-변경점)에 파일별로 정리되어 있다.
+`catcher/`에 새 아키텍처를 구현했고 순수 함수 모듈은 하드웨어 없이 동작·검증된다.
+`prep/`에 캘리브레이션·데이터수집·학습 도구를 갖췄다.
+`pico/`는 아직 구설계라 재작성이 필요하다
+([pico-control.md 8장](docs/pico-control.md#8-현재-코드-대비-변경점)).
 
-**다음 작업: Phase 0 (시뮬레이터와 테스트).**
+**다음 작업: Phase 0 (시뮬레이터와 테스트) + Phase 4 (CSI 카메라로 비전 파이프라인 예행).**

@@ -1,4 +1,4 @@
-"""① 객체 인식 — 카메라 캡처 + YOLO11n 추론.
+"""① 객체 인식 — 카메라 캡처 + YOLOv8n 추론.
 
 ⚠ 하드웨어 경계다. Picamera2와 HailoRT 연동은 아직 스텁이다.
    인터페이스만 확정되어 있고, main은 이 프로토콜을 만족하는 객체면 무엇이든 받는다
@@ -54,10 +54,11 @@ class Picamera2Camera:
 
 
 class HailoDetector:
-    """HailoRT YOLO11n 추론기. 정해야함: 실제 연동.
+    """HailoRT YOLOv8n 추론기. 정해야함: 실제 연동.
 
     ⚠ HailoRT API는 실제 설치 버전 문서로 검증할 것.
-    ⚠ Hailo Model Zoo의 yolo11n 지원 여부를 먼저 확인할 것 (없으면 yolov8n 대체).
+    ⚠ 모델은 yolov8n으로 확정했다 — Model Zoo 지원이 확실하기 때문이다
+      (../prep/train_yolo.py, ../docs/vision-pipeline.md 5장).
     """
 
     def __init__(self, hef_path: str) -> None:

@@ -37,7 +37,7 @@ DISTORTION_COEFFS = (0.0, 0.0, 0.0, 0.0)        # 정해야함: 어안 캘리브
 # 카메라를 통 입구 림 가장자리에 두므로 중심에서 약 15cm 벗어난다.
 CAMERA_OFFSET_M = (0.15, 0.0)   # 정해야함: 조립 후 자로 실측
 
-# ── 검출 (YOLO11n -> Hailo) ───────────────────────────────────────────
+# ── 검출 (YOLOv8n -> Hailo) ───────────────────────────────────────────
 YOLO_MODEL_PATH: str | None = None   # 정해야함: 학습 + Hailo 컴파일 후 .hef 경로
 YOLO_CONF_THRESHOLD = 0.5
 YOLO_INPUT_SIZE = 640                # ROI 크롭 크기와 반드시 일치시킨다

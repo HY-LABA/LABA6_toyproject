@@ -1,6 +1,8 @@
 # 비전 파이프라인 — 데이터셋부터 추론까지
 
-쓰레기 사진 촬영 → 라벨링 → YOLO11n 학습 → Hailo 컴파일 → 추론까지의 전 과정.
+쓰레기 사진 촬영 → 라벨링 → YOLOv8n 학습 → Hailo 컴파일 → 추론까지의 전 과정.
+
+도구는 [`../prep/`](../prep/)에 구현되어 있다.
 
 이 파이프라인의 출력은 `Detection(class_name, bbox, confidence)` 하나이고,
 그 bbox가 [궤적 계산](pi5-algorithm.md)의 유일한 입력이다.
@@ -46,7 +48,7 @@ paper_cup을 클래스에서 빼면 이 위험이 사라진다 (7장).
 
 **가장 중요한 설계 결정이다.**
 
-YOLO11n의 기본 입력은 640×640이다. 원본 1456×1088을 그대로 리사이즈하면 스케일이
+YOLOv8n의 기본 입력은 640×640이다. 원본 1456×1088을 그대로 리사이즈하면 스케일이
 640/1456 = 0.44로 줄어들고, **bbox도 같이 줄어든다.**
 
 | 추론 입력 | 2 m에서 캔 bbox | 프레임당 σ_z | 배율 |
@@ -182,14 +184,22 @@ test는 가능하면 별도 촬영 세션으로 확보
 
 ---
 
-## 5. 학습 (YOLO11n)
+## 5. 학습 (YOLOv8n)
 
-### 왜 YOLO11n인가
+구현: [`../prep/train_yolo.py`](../prep/train_yolo.py)
+
+### 왜 YOLOv8n인가
 
 - **n(nano)**: Hailo-8L에서 60 fps를 노려볼 수 있다. 프레임 예산이 16.7 ms이고 추론은
   10 ms 이내여야 한다 ([physics.md 7.4장](physics.md#74-프레임레이트와-처리-예산))
+- **Hailo Model Zoo 지원이 확실하다.** yolo11n은 지원 여부가 미확인 리스크였는데
+  ([open-questions.md](open-questions.md)), v8n을 쓰면 6장의 컴파일 단계에서 막힐 일이 없다
 - 클래스 3개, 물체가 단순해서 큰 모델이 필요 없다
 - 정확한 bbox 회귀가 목표인데, 이건 모델 크기보다 **데이터 품질**에 더 좌우된다
+
+> 정확도 차이는 이 용도에서 미미하다. 병목은 모델 크기가 아니라 라벨 품질이다.
+> 나중에 바꾸고 싶으면 `train_yolo.py --model yolo11n.pt` 한 줄이면 된다
+> (ultralytics가 동일하게 처리한다).
 
 ### 설정
 
@@ -206,7 +216,7 @@ names:
 
 ```python
 from ultralytics import YOLO
-model = YOLO("yolo11n.pt")          # COCO 사전학습 가중치에서 시작
+model = YOLO("yolov8n.pt")          # COCO 사전학습 가중치에서 시작
 model.train(
     data="dataset.yaml",
     imgsz=640,                       # ROI 크롭 크기와 일치시킨다 (2장)
@@ -234,7 +244,7 @@ model.train(
 ## 6. Hailo 컴파일
 
 ```
-yolo11n.pt  ──export──▶  ONNX  ──Hailo DFC──▶  .hef
+yolov8n.pt  ──export──▶  ONNX  ──Hailo DFC──▶  .hef
                                   │
                           INT8 양자화 + calibration
 ```
@@ -249,8 +259,8 @@ yolo11n.pt  ──export──▶  ONNX  ──Hailo DFC──▶  .hef
 
 ### ⚠ 확인이 필요한 것
 
-- **Hailo Model Zoo의 yolo11n 지원 여부를 먼저 확인한다.** 지원이 없으면 yolov8n으로
-  대체한다 (이 문서의 나머지는 그대로 유효하다)
+- **Hailo Model Zoo에서 yolov8n 레시피를 확인한다.** v8n을 고른 이유가 이것이지만,
+  설치된 DFC 버전에서 실제로 도는지는 컴파일해봐야 안다
 - **INT8 양자화가 bbox 정밀도를 떨어뜨릴 수 있다.** 양자화 전후로 σ_w를 비교해서
   열화 폭을 반드시 측정한다. 이게 이 단계의 핵심 검증 항목이다
 
@@ -318,6 +328,10 @@ detect_roi :  bbox_원본 = bbox_640 + (roi_x0, roi_y0)      ← 스케일 없�
 
 ## 9. 작업 순서
 
+> **구현된 도구는 [`../prep/`](../prep/)에 있다.** 아래 각 단계에 대응하는 스크립트가 있고,
+> 실행 순서는 [prep/README.md](../prep/README.md) 참고.
+> 자동 라벨링은 MOG2 배경차분을 쓴다 — 카메라가 고정이고 배경(천장)이 정적이라 성립한다.
+
 이 순서대로 하면 앞 단계 결과로 뒷 단계를 검증할 수 있다.
 
 1. **어안 카메라 캘리브레이션** — `cv2.fisheye.calibrate`로 `f_px`, 주점, 왜곡계수 확보.
@@ -326,7 +340,7 @@ detect_roi :  bbox_원본 = bbox_640 + (roi_x0, roi_y0)      ← 스케일 없�
 2. **정지 물체 촬영** — 거리별. 데이터셋 겸 σ_w 측정용 기준 세트
 3. **낙하 영상 촬영** — 100회 이상, 배경·조명 다양화
 4. **프레임 추출 + 라벨링** — 라벨 기준 먼저 합의
-5. **YOLO11n 학습** — val에서 recall 확인
+5. **YOLOv8n 학습** — val에서 recall 확인
 6. **σ_w 측정** (양자화 전) — 2번 세트로. **여기서 2 px를 못 맞추면 되돌아간다**
 7. **Hailo 컴파일 + 양자화**
 8. **σ_w 재측정** (양자화 후) — 열화 폭 확인
