@@ -77,6 +77,76 @@ def beep() -> None:
     sys.stdout.flush()
 
 
+def throw_summary(track, frames, banked: bool, width: int = 960,
+                  cell: int = 96, max_crops: int = 10):
+    """One image per throw: the trail it traced, and the crops it produced.
+
+    Built only when a track closes, so it costs a few milliseconds per throw
+    rather than anything per frame. That matters -- detection is already the
+    bottleneck on the Pi, and a per-frame preview would make the very problem
+    it is meant to diagnose worse.
+    """
+    idx = [i for i in track.frames if i in frames]
+    if not idx:
+        return None
+
+    base = frames[idx[len(idx) // 2]].copy()
+    pts = [(int(d.u), int(d.v)) for d in track.detections]
+    for i, (u, v) in enumerate(pts):
+        # Fade from dark to bright along the flight so direction is readable.
+        s = int(60 + 195 * i / max(1, len(pts) - 1))
+        cv2.circle(base, (u, v), 6, (0, s, s), -1)
+    for a, b in zip(pts, pts[1:]):
+        cv2.line(base, a, b, (0, 200, 200), 2)
+    x, y, w, h = track.detections[-1].bbox
+    cv2.rectangle(base, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    scale = width / base.shape[1]
+    top = cv2.resize(base, (width, int(base.shape[0] * scale)))
+
+    picks = [track.detections[i] for i in
+             np.linspace(0, len(track.detections) - 1,
+                         min(max_crops, len(track.detections))).astype(int)]
+    pick_idx = [track.frames[i] for i in
+                np.linspace(0, len(track.frames) - 1,
+                            min(max_crops, len(track.frames))).astype(int)]
+    strip = np.full((cell, width, 3), 25, np.uint8)
+    for i, (det, fi) in enumerate(zip(picks, pick_idx)):
+        if fi not in frames or (i + 1) * cell > width:
+            continue
+        strip[:, i * cell:(i + 1) * cell] = cv2.resize(
+            det.crop(frames[fi], out_size=cell), (cell, cell))
+
+    banner = np.full((34, width, 3), 25, np.uint8)
+    colour = (80, 220, 80) if banked else (80, 80, 230)
+    text = (f"BANKED   n={track.n}  residual={track.residual_px:.2f}px"
+            if banked else
+            f"REJECTED  n={track.n}  residual={track.residual_px:.2f}px")
+    cv2.putText(banner, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                colour, 2, cv2.LINE_AA)
+    return np.vstack([banner, top, strip])
+
+
+def show_throw(image, out_dir: str, window: bool) -> bool:
+    """Write the summary, and show it if a display is available.
+
+    Returns whether the window is still usable -- a headless run falls back to
+    the file without complaining twice.
+    """
+    if image is None:
+        return window
+    cv2.imwrite(os.path.join(out_dir, "last_throw.png"), image)
+    if not window:
+        return False
+    try:
+        cv2.imshow("last throw", image)
+        cv2.waitKey(1)
+        return True
+    except Exception:  # noqa: BLE001 - no display; keep writing the file
+        print("  (no display -- writing last_throw.png instead)")
+        return False
+
+
 def warm_up(stream, detector, n: int) -> None:
     """Let the background model learn the empty scene before anyone throws.
 
@@ -256,6 +326,9 @@ def run_collect(args) -> int:
     run_id = time.strftime("%H%M%S")
     frames_cache = {}
     kept = distractors = crops = 0
+    window = bool(args.preview)
+    if args.preview:
+        print(f"  preview on -- also written to {out_dir}/last_throw.png\n")
     try:
         for frame in stream:
             frames_cache[frame.index] = frame.image
@@ -276,6 +349,10 @@ def run_collect(args) -> int:
                     print(f"  [{kept}/{args.target}] throw banked -- "
                           f"n={tr.n} residual={tr.residual_px:.2f}px")
                     beep()
+                    if args.preview:
+                        window = show_throw(
+                            throw_summary(tr, frames_cache, True),
+                            out_dir, window)
                 else:
                     # Say why. Silence during collection is useless: you are
                     # across the room and cannot tell a missed throw from one
@@ -286,6 +363,10 @@ def run_collect(args) -> int:
                         else:
                             why = f"not ballistic (residual {tr.residual_px:.1f}px)"
                         print(f"  rejected -- n={tr.n}, {why}")
+                        if args.preview:
+                            window = show_throw(
+                                throw_summary(tr, frames_cache, False),
+                                out_dir, window)
                     if tr.n >= args.min_distractor:
                         distractors += 1
                         crops += save_track(tr, frames_cache, out_dir, args,
@@ -296,11 +377,25 @@ def run_collect(args) -> int:
     except KeyboardInterrupt:
         print("\ninterrupted -- what was banked is already on disk")
     finally:
+        # A track still open when the run ends is closed here. It must be
+        # reported exactly like one that closed mid-loop -- otherwise the last
+        # throw of every session banks silently, with no beep and no preview.
         for tr in tracker.close_all():
             if tr.verdict == PROJECTILE and kept < args.target:
                 kept += 1
                 crops += save_track(tr, frames_cache, out_dir, args,
                                     args.session, args.block, kept, run_id)
+                print(f"  [{kept}/{args.target}] throw banked -- "
+                      f"n={tr.n} residual={tr.residual_px:.2f}px")
+                beep()
+                if args.preview:
+                    window = show_throw(throw_summary(tr, frames_cache, True),
+                                        out_dir, window)
+        if args.preview:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:  # noqa: BLE001 - headless
+                pass
         source.close()
 
     print(f"\n{kept} throws, {distractors} distractors, {crops} crops -> {out_dir}")
@@ -348,6 +443,9 @@ def main() -> int:
     # tracks are worth keeping as hard negatives.
     p.add_argument("--min-distractor", type=int, default=15)
 
+    p.add_argument("--preview", action="store_true",
+                   help="after each throw, show the trail and the crops it "
+                        "produced (also written to last_throw.png)")
     p.add_argument("--crop", type=int, default=64)
     p.add_argument("--pad", type=float, default=1.4)
     p.add_argument("--save-frames", action="store_true", default=True)
