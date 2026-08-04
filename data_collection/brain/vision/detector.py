@@ -92,6 +92,12 @@ class MotionDetector:
         self.scale = max(1, int(scale))
         self._n = 0
         self.last_ms = 0.0
+        # Diagnostics. A frame that is too dark, or a mask with foreground
+        # pixels that never survive the area filter, both look identical from
+        # the outside -- "no detections" -- but need opposite fixes.
+        self.last_mean = 0.0
+        self.last_fg_px = 0
+        self.last_blobs = 0
 
         self._bg = cv2.createBackgroundSubtractorMOG2(
             history=history, varThreshold=var_threshold,
@@ -121,9 +127,13 @@ class MotionDetector:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._k_open)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._k_close)
 
+        self.last_mean = float(work.mean())
+        self.last_fg_px = int(cv2.countNonZero(mask))
+
         out: List[Detection] = []
         if self.ready:
             n, _lab, stats, cents = cv2.connectedComponentsWithStats(mask, 8)
+            self.last_blobs = n - 1  # excluding background
             # Thresholds are quoted full-resolution, so convert once here
             # rather than making every caller think about `scale`.
             lo = self.min_area / (s * s)

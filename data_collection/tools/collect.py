@@ -186,10 +186,15 @@ def run_check(args) -> int:
 
     idle_hits = idle_frames = 0
     areas, ms, projectiles, distractors = [], [], 0, 0
+    means, fg, blobs_seen, blobs_kept = [], [], 0, 0
     try:
         for frame in stream:
             dets = detector.detect(frame.image)
             ms.append(detector.last_ms)
+            means.append(detector.last_mean)
+            fg.append(detector.last_fg_px)
+            blobs_seen += detector.last_blobs
+            blobs_kept += len(dets)
             if dets:
                 areas += [d.area for d in dets]
                 print(f"  frame {frame.index:5d}  {len(dets)} det  "
@@ -217,6 +222,24 @@ def run_check(args) -> int:
 
     print("\n--- summary ---")
     print(f"  detect: median {np.median(ms) if ms else 0:.1f} ms/frame")
+
+    # Brightness and mask stats separate the two ways "no detections" happens:
+    # nothing reaching the mask at all (too dark / threshold too high) versus
+    # blobs reaching it and then being filtered out by the area window.
+    mean_b = float(np.mean(means)) if means else 0.0
+    print(f"  brightness: mean pixel {mean_b:.0f}/255")
+    if mean_b < 40:
+        print("  ! image is very dark -- MOG2 needs contrast. Raise --gain,")
+        print("    or --exposure to 2000-4000, or add light. This alone can")
+        print("    cost most of your detections.")
+    elif mean_b > 220:
+        print("  ! image is blown out -- lower --gain or --exposure")
+
+    print(f"  mask: median {int(np.median(fg)) if fg else 0} foreground px/frame")
+    print(f"  blobs: {blobs_seen} found, {blobs_kept} kept after area filter")
+    if blobs_seen and blobs_kept < blobs_seen * 0.2:
+        print("  ! most blobs are being discarded by the area window --")
+        print(f"    widen --min-area/--max-area (currently {args.min_area}/{args.max_area})")
     if areas:
         print(f"  areas:  min {min(areas)}  median {int(np.median(areas))}  max {max(areas)}")
         if min(areas) < args.min_area * 1.3:
