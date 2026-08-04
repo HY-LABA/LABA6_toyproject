@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cv2  # noqa: E402
 
 from brain.planning.camera import Camera  # noqa: E402
+from brain.planning.trajectory import MIN_OBSERVATIONS  # noqa: E402
 from brain.vision.detector import MotionDetector  # noqa: E402
 from brain.vision.tracker import PROJECTILE, TrackManager  # noqa: E402
 
@@ -173,7 +174,13 @@ def save_track(track, frames, out_dir, args, session, block, throw_idx,
     still appending manifest rows, leaving rows that point at another object's
     images. Silent, and fatal to the dataset.
     """
-    label = args.label if track.verdict == PROJECTILE else "distractor"
+    projectile = track.verdict == PROJECTILE
+    label = args.label if projectile else "distractor"
+    # Distractors are not the object you were throwing -- they are usually the
+    # thrower walking back into frame. Giving them the thrown object's id would
+    # drag them along when that object is held out for test, swamping the test
+    # set with unrelated crops.
+    object_id = args.object_id if projectile else f"distractor_{run_id}"
     crops_dir = os.path.join(out_dir, "crops", label)
     frames_dir = os.path.join(out_dir, "frames")
     os.makedirs(crops_dir, exist_ok=True)
@@ -205,7 +212,7 @@ def save_track(track, frames, out_dir, args, session, block, throw_idx,
             fh.write(json.dumps({
                 "session_id": session,
                 "block_id": block,
-                "object_id": args.object_id,
+                "object_id": object_id,
                 "label": label,
                 "verdict": track.verdict,
                 "track_id": track.id,
@@ -252,8 +259,12 @@ def run_collect(args) -> int:
     try:
         for frame in stream:
             frames_cache[frame.index] = frame.image
-            # Only the recent past can still belong to an open track.
-            for old in [k for k in frames_cache if k < frame.index - 120]:
+            # Only the recent past can still belong to an open track. Each
+            # frame is ~6 MB at 1640x1232, so this window is real memory: 120
+            # frames was ~730 MB and enough to cause pressure on a 4 GB Pi.
+            # A flight is ~32 frames, so 45 covers any track that can still
+            # be open.
+            for old in [k for k in frames_cache if k < frame.index - 45]:
                 del frames_cache[old]
 
             dets = detector.detect(frame.image)
@@ -265,11 +276,21 @@ def run_collect(args) -> int:
                     print(f"  [{kept}/{args.target}] throw banked -- "
                           f"n={tr.n} residual={tr.residual_px:.2f}px")
                     beep()
-                elif tr.n >= args.min_distractor:
-                    distractors += 1
-                    crops += save_track(tr, frames_cache, out_dir, args,
-                                        args.session, args.block, -distractors,
-                                        run_id)
+                else:
+                    # Say why. Silence during collection is useless: you are
+                    # across the room and cannot tell a missed throw from one
+                    # the gate rejected.
+                    if tr.n >= MIN_OBSERVATIONS:
+                        if tr.residual_px == float("inf"):
+                            why = "not a projectile (fit degenerate)"
+                        else:
+                            why = f"not ballistic (residual {tr.residual_px:.1f}px)"
+                        print(f"  rejected -- n={tr.n}, {why}")
+                    if tr.n >= args.min_distractor:
+                        distractors += 1
+                        crops += save_track(tr, frames_cache, out_dir, args,
+                                            args.session, args.block,
+                                            -distractors, run_id)
             if kept >= args.target:
                 break
     except KeyboardInterrupt:
@@ -316,10 +337,16 @@ def main() -> int:
 
     p.add_argument("--min-area", type=int, default=300)
     p.add_argument("--max-area", type=int, default=60000)
-    p.add_argument("--scale", type=int, default=2)
+    # Default tuned for the Pi, not a laptop. Background subtraction over
+    # 1640x1232 costs ~22ms on a Pi 5 at scale=2, which eats most of a 25ms
+    # frame budget and starves each throw of detections.
+    p.add_argument("--scale", type=int, default=3)
     p.add_argument("--warmup", type=int, default=30)
     p.add_argument("--link-px", type=float, default=120.0)
-    p.add_argument("--min-distractor", type=int, default=5)
+    # Retrieving the thrown object generates a lot of motion, and at 5 that
+    # produced ~180 saved distractor tracks per throw cycle. Only substantial
+    # tracks are worth keeping as hard negatives.
+    p.add_argument("--min-distractor", type=int, default=15)
 
     p.add_argument("--crop", type=int, default=64)
     p.add_argument("--pad", type=float, default=1.4)
