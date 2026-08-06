@@ -136,7 +136,8 @@ def main() -> int:
     out_img.mkdir(parents=True, exist_ok=True)
     out_lbl.mkdir(parents=True, exist_ok=True)
 
-    cam = camlib.open_camera(args.camera)
+    cam = camlib.open_camera(args.camera, exposure_us=args.exposure_us, gain=args.gain,
+                              auto_lock=args.auto_lock_exposure)
     frame, _ = cam.read()
     H, W = frame.shape[:2]
     finder = BlobFinder(cv2, args, W * H)

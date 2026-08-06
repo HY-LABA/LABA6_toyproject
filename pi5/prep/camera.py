@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from dataclasses import dataclass
 
@@ -35,6 +36,8 @@ class CameraSpec:
     fps: int
     calib_model: str          # "pinhole" | "fisheye"
     exposure_us: int | None   # None이면 자동 노출
+    gain: float | None = None  # None이면 자동. exposure_us를 짧게 유지하며 밝기를
+                                # 확보하려면 이걸 올린다 (TROUBLESHOOTING.md 2-1).
     note: str = ""
 
 
@@ -42,20 +45,23 @@ SPECS: dict[str, CameraSpec] = {
     # 지금 쓰는 것 ────────────────────────────────────────────────────────
     "csi": CameraSpec(
         name="기본 CSI 카메라", width=1640, height=1232, fps=30,
-        calib_model="pinhole", exposure_us=10000,
+        calib_model="pinhole", exposure_us=10000, gain=2.0,
         note="롤링 셔터. 낙하 물체 bbox가 기울어질 수 있다 — 수집 데이터는 임시용. "
-             "exposure_us는 조명 밝기 보고 조정할 것 (어두우면 값을 키운다).",
+             "exposure_us/gain은 조명 밝기 보고 조정할 것 — 어두우면 gain부터 올리고, "
+             "그래도 부족하면 exposure_us를 올린다 (블러 대신 밝기를 게인으로 확보). "
+             "check_setup.py의 밝기(mean) 진단을 보며 --exposure-us/--gain 으로 맞출 것.",
     ),
     # 도착하면 이걸로 ─────────────────────────────────────────────────────
     "gs": CameraSpec(
         name="CAM-IMX296Color-GS + M12 2.8mm", width=1456, height=1088, fps=60,
-        calib_model="fisheye", exposure_us=800,
-        note="글로벌 셔터. 대각 140° 어안이라 반드시 fisheye로 캘리브레이션할 것.",
+        calib_model="fisheye", exposure_us=1000, gain=4.0,
+        note="글로벌 셔터. 대각 140° 어안이라 반드시 fisheye로 캘리브레이션할 것. "
+             "exposure_us/gain은 data_collection/brain/capture/source.py에서 검증된 값.",
     ),
     # PC 웹캠 (코드 점검용) ────────────────────────────────────────────────
     "webcam": CameraSpec(
         name="PC 웹캠", width=1280, height=720, fps=30,
-        calib_model="pinhole", exposure_us=None,
+        calib_model="pinhole", exposure_us=None, gain=None,
         note="라파이 없이 코드 흐름만 확인할 때.",
     ),
 }
@@ -66,8 +72,9 @@ DEFAULT = "csi"
 class Camera:
     """Picamera2(라파이) 또는 OpenCV(웹캠/USB)를 같은 인터페이스로 감싼다."""
 
-    def __init__(self, spec: CameraSpec, backend: str = "auto") -> None:
+    def __init__(self, spec: CameraSpec, backend: str = "auto", auto_lock: bool = False) -> None:
         self.spec = spec
+        self.auto_lock = auto_lock
         self._impl = None
         self._kind = None
 
@@ -79,6 +86,8 @@ class Camera:
                     raise
                 print(f"[camera] Picamera2 사용 불가 ({exc}) -> OpenCV로 대체")
         if self._impl is None:
+            if self.auto_lock:
+                print("[camera] auto_lock은 Picamera2 전용이다 — OpenCV 백엔드에선 무시된다.")
             self._open_opencv()
 
     # ── 백엔드 ────────────────────────────────────────────────────────
@@ -91,14 +100,45 @@ class Camera:
             controls={"FrameRate": float(self.spec.fps)},
         )
         cam.configure(cfg)
-        if self.spec.exposure_us is not None:
+        cam.start()
+        time.sleep(1.0)                      # AWB/AGC 안정화 (기본은 auto로 뜬다)
+
+        if self.auto_lock:
+            # 자동 노출/화밸을 켜둔 채 지금 조명에 수렴할 때까지 기다린 다음,
+            # 그 순간의 값을 읽어 고정한다. MOG2는 프레임마다 노출이 흔들리면
+            # "배경이 움직였다"고 오인하므로 결국 고정은 필수인데, 값 자체는
+            # 조명이 바뀔 때마다 사람이 손으로 맞추지 않고 카메라가 재기 하게 둔다.
+            cam.set_controls({"AeEnable": True, "AwbEnable": True})
+            for _ in range(30):
+                cam.capture_array()
+            meta = cam.capture_metadata()
+            exposure_us = int(meta["ExposureTime"])
+            gain = float(meta["AnalogueGain"])
+            lock = {"AeEnable": False, "AwbEnable": False,
+                    "ExposureTime": exposure_us, "AnalogueGain": gain}
+            if "ColourGains" in meta:
+                lock["ColourGains"] = meta["ColourGains"]   # AWB도 같이 얼린다
+            cam.set_controls(lock)
+            time.sleep(0.3)                  # 고정값 적용 안정화
+            self.spec = dataclasses.replace(self.spec, exposure_us=exposure_us, gain=gain)
+            print(f"[camera] 자동 노출을 읽어서 고정했다 — "
+                  f"exposure_us={exposure_us}, gain={gain:.2f}")
+        elif self.spec.exposure_us is not None:
             # 노출 고정. 모션 블러를 억제하려면 짧게 잡아야 한다.
             # AWB도 같이 꺼야 한다 — 밝기만 고정하고 색온도가 계속 자동이면
             # 채널별 값이 흔들려서 MOG2가 여전히 배경을 "움직인다"고 오인한다.
-            cam.set_controls({"ExposureTime": self.spec.exposure_us, "AeEnable": False,
-                              "AwbEnable": False})
-        cam.start()
-        time.sleep(1.0)                      # AWB/AGC 안정화
+            controls = {"ExposureTime": self.spec.exposure_us, "AeEnable": False,
+                        "AwbEnable": False}
+            if self.spec.gain is not None:
+                # 노출은 짧게 유지(모션 블러 억제)하고 밝기는 게인으로 확보한다.
+                # AE를 끈 상태에서 게인을 안 정해주면 꺼지기 직전 값이 그대로 남아
+                # 세션마다 밝기가 들쭉날쭉해진다.
+                controls["AnalogueGain"] = self.spec.gain
+            cam.set_controls(controls)
+            time.sleep(0.3)                  # 고정값 적용 안정화
+        # 둘 다 아니면(exposure_us=None, auto_lock=False) AE/AWB를 계속 켜둔 채로 둔다
+        # — webcam 프로파일처럼 애초에 고정이 필요 없는 경우.
+
         self._impl, self._kind = cam, "picamera2"
 
     def _open_opencv(self) -> None:
@@ -138,21 +178,52 @@ class Camera:
         self._impl = None
 
 
-def open_camera(profile: str = DEFAULT, backend: str = "auto") -> Camera:
+def open_camera(profile: str = DEFAULT, backend: str = "auto",
+                 exposure_us: int | None = None, gain: float | None = None,
+                 auto_lock: bool = False) -> Camera:
     if profile not in SPECS:
         raise KeyError(f"알 수 없는 프로파일 '{profile}'. 가능: {list(SPECS)}")
     spec = SPECS[profile]
-    cam = Camera(spec, backend)
+    if auto_lock and (exposure_us is not None or gain is not None):
+        print("[camera] --auto-lock-exposure와 --exposure-us/--gain을 같이 줬다 — "
+              "auto_lock이 우선이고 수동 값은 무시된다.")
+    if not auto_lock and (exposure_us is not None or gain is not None):
+        # 조명이 세션마다 바뀌므로 SPECS 기본값을 매번 코드에서 고치는 대신
+        # CLI에서 덮어쓴다.
+        overrides = {}
+        if exposure_us is not None:
+            overrides["exposure_us"] = exposure_us
+        if gain is not None:
+            overrides["gain"] = gain
+        spec = dataclasses.replace(spec, **overrides)
+    cam = Camera(spec, backend, auto_lock=auto_lock)
+    spec = cam.spec   # auto_lock이면 여기서 실측값으로 갱신돼 있다
     print(f"[camera] {spec.name} ({spec.width}x{spec.height} @{spec.fps}fps, "
-          f"backend={cam.backend}, calib={spec.calib_model})")
+          f"backend={cam.backend}, calib={spec.calib_model}, "
+          f"exposure_us={spec.exposure_us}, gain={spec.gain})")
     if spec.note:
         print(f"[camera] {spec.note}")
     return cam
 
 
 def add_profile_arg(parser) -> None:
-    """모든 스크립트가 공유하는 --camera 옵션."""
+    """모든 스크립트가 공유하는 --camera/--exposure-us/--gain/--auto-lock-exposure 옵션."""
     parser.add_argument(
         "--camera", default=DEFAULT, choices=list(SPECS),
         help=f"카메라 프로파일 (기본 {DEFAULT}). 교체 시 이 값만 바꾸면 된다.",
+    )
+    parser.add_argument(
+        "--exposure-us", type=int, default=None,
+        help="프로파일 기본 노출(µs)을 덮어쓴다. 조명 바꿀 때마다 camera.py를 "
+             "고치지 않고 이걸로 튜닝할 것 (check_setup.py의 밝기 진단을 보면서).",
+    )
+    parser.add_argument(
+        "--gain", type=float, default=None,
+        help="프로파일 기본 게인을 덮어쓴다. 어두우면 노출보다 이걸 먼저 올려라 — "
+             "노출을 늘리면 낙하 물체 모션 블러가 커진다.",
+    )
+    parser.add_argument(
+        "--auto-lock-exposure", dest="auto_lock_exposure", action="store_true",
+        help="시작할 때 AE/AWB를 잠깐 켜서 지금 조명에 맞는 노출/게인을 재고, 그 값으로 "
+             "고정한 채 촬영한다. --exposure-us/--gain 수동 지정보다 우선한다.",
     )

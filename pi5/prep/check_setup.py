@@ -54,12 +54,14 @@ def check_packages() -> list[str]:
     return missing
 
 
-def check_camera(profile: str) -> bool:
+def check_camera(profile: str, exposure_us: int | None, gain: float | None,
+                  auto_lock: bool = False) -> bool:
     spec = camlib.SPECS[profile]
     print(f"  프로파일: {spec.name} — {spec.width}x{spec.height} @{spec.fps}fps, "
           f"캘리브레이션 모델 = {spec.calib_model}")
     try:
-        cam = camlib.open_camera(profile)
+        cam = camlib.open_camera(profile, exposure_us=exposure_us, gain=gain,
+                                  auto_lock=auto_lock)
     except Exception as exc:  # noqa: BLE001
         return _check("카메라 열기", False, str(exc))
     try:
@@ -71,10 +73,14 @@ def check_camera(profile: str) -> bool:
             print(f"       ⚠ 요청 해상도({spec.width}x{spec.height})와 다르다. "
                   f"드라이버가 가장 가까운 모드를 골랐을 수 있다.")
         mean = float(frame.mean())
+        print(f"       밝기(mean) = {mean:.1f}  (건강한 범위 대략 40~200)")
         if mean < 10:
-            print("       ⚠ 화면이 거의 검다. 렌즈 캡을 벗겼는지, 노출이 너무 짧지 않은지 확인.")
+            print("       ⚠ 화면이 거의 검다. 렌즈 캡을 벗겼는지 먼저 확인. 그다음 "
+                  "--gain을 올려라 (--exposure-us를 늘리면 낙하 물체 블러가 커진다).")
+        elif mean < 40:
+            print("       ⚠ 다소 어둡다. --gain부터 올리고, 부족하면 --exposure-us를 올려라.")
         elif mean > 245:
-            print("       ⚠ 화면이 포화됐다. 노출을 줄여라.")
+            print("       ⚠ 화면이 포화됐다. --gain 또는 --exposure-us를 낮춰라.")
         return ok
     except Exception as exc:  # noqa: BLE001
         return _check("프레임 캡처", False, str(exc))
@@ -107,7 +113,7 @@ def main() -> int:
     cam_ok = True
     if not args.skip_camera:
         print("\n=== 카메라 ===")
-        cam_ok = check_camera(args.camera)
+        cam_ok = check_camera(args.camera, args.exposure_us, args.gain, args.auto_lock_exposure)
 
     print("\n=== 요약 ===")
     if missing:
