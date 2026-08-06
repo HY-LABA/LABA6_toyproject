@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import time
 from dataclasses import dataclass
@@ -180,14 +181,20 @@ class Camera:
 
 def open_camera(profile: str = DEFAULT, backend: str = "auto",
                  exposure_us: int | None = None, gain: float | None = None,
-                 auto_lock: bool = False) -> Camera:
+                 auto_lock: bool | None = None) -> Camera:
+    """auto_lock=None(기본)이면: 수동으로 exposure_us/gain을 안 줬을 때만 자동측정 후
+    고정한다. 매번 킬 때 조명이 뭐가 됐든 알아서 재고 고정하는 게 기본 동작이고,
+    명시적으로 숫자를 준 경우에만 그 숫자를 존중해 자동측정을 건너뛴다."""
     if profile not in SPECS:
         raise KeyError(f"알 수 없는 프로파일 '{profile}'. 가능: {list(SPECS)}")
     spec = SPECS[profile]
-    if auto_lock and (exposure_us is not None or gain is not None):
+    manual = exposure_us is not None or gain is not None
+    if auto_lock is None:
+        auto_lock = not manual
+    elif auto_lock and manual:
         print("[camera] --auto-lock-exposure와 --exposure-us/--gain을 같이 줬다 — "
               "auto_lock이 우선이고 수동 값은 무시된다.")
-    if not auto_lock and (exposure_us is not None or gain is not None):
+    if not auto_lock and manual:
         # 조명이 세션마다 바뀌므로 SPECS 기본값을 매번 코드에서 고치는 대신
         # CLI에서 덮어쓴다.
         overrides = {}
@@ -223,7 +230,9 @@ def add_profile_arg(parser) -> None:
              "노출을 늘리면 낙하 물체 모션 블러가 커진다.",
     )
     parser.add_argument(
-        "--auto-lock-exposure", dest="auto_lock_exposure", action="store_true",
+        "--auto-lock-exposure", dest="auto_lock_exposure", default=None,
+        action=argparse.BooleanOptionalAction,
         help="시작할 때 AE/AWB를 잠깐 켜서 지금 조명에 맞는 노출/게인을 재고, 그 값으로 "
-             "고정한 채 촬영한다. --exposure-us/--gain 수동 지정보다 우선한다.",
+             "고정한 채 촬영한다. 기본 동작이라 안 줘도 켜진다 — --exposure-us/--gain을 "
+             "직접 준 경우에만 자동으로 꺼진다. 굳이 끄려면 --no-auto-lock-exposure.",
     )

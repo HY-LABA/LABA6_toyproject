@@ -144,12 +144,13 @@ python capture_dataset.py --label pet_bottle --no-display
       세션마다 코드 수정 없이 튜닝 가능 (2026-08-06). `check_setup.py`가 밝기(mean)를
       출력하니 그거 보면서 맞출 것. 형광등→자연광 전환 시 `csi` 기본 게인(2.0)부터
       올려보고, 그래도 어두우면 노출을 올릴 것 — 순서를 반대로 하면 낙하 물체 블러가 커진다.
-- [x] **`--auto-lock-exposure` 추가** (2026-08-06). 시작 시 AE/AWB를 30프레임 켜서
-      지금 조명에 수렴시킨 뒤 `capture_metadata()`로 실제 `ExposureTime`/`AnalogueGain`을
-      읽어 그 값으로 고정한다. 조명(창가 자연광 vs 형광등 vs 시간대)이 바뀔 때마다
-      `--exposure-us`/`--gain` 숫자를 손으로 재는 대신 이 플래그 하나로 해결.
-      `--exposure-us`/`--gain`을 같이 주면 auto_lock이 우선하고 무시된다.
-      OpenCV 백엔드(웹캠)에는 적용 안 됨 — Picamera2 전용.
+- [x] **`--auto-lock-exposure` 추가, 기본값으로 승격** (2026-08-06). 시작 시 AE/AWB를
+      30프레임 켜서 지금 조명에 수렴시킨 뒤 `capture_metadata()`로 실제
+      `ExposureTime`/`AnalogueGain`을 읽어 그 값으로 고정한다. MOG2가 켜져 있는 동안
+      노출이 절대 안 바뀌어야 하므로("카메라 환경을 변하게 하지 않을 예정"), 매번 실행할
+      때마다 **아무 옵션 안 줘도 자동으로** 이 과정을 거친다 — `--exposure-us`/`--gain`을
+      직접 준 경우에만 자동측정을 건너뛰고 그 수동값을 쓴다. 끄고 싶으면
+      `--no-auto-lock-exposure`. OpenCV 백엔드(웹캠)에는 적용 안 됨 — Picamera2 전용.
 - [ ] **1280×720 @ 60fps 모드 검토** — 픽셀 수 절반이라 MOG2가 2배 빠르고 프레임도 2배.
       투척당 수집 장수가 크게 오른다. imgsz=640으로 학습하므로 해상도 손해는 없다.
 
