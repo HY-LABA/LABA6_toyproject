@@ -116,7 +116,13 @@ def main() -> int:
                          "X11 로 프레임을 보내는 비용이 30fps를 3fps로 떨어뜨린다")
     ap.add_argument("--warmup", type=int, default=60, help="배경 학습 프레임 수")
     ap.add_argument("--arm-frames", type=int, default=2,
-                    help="연속 이 프레임 이상 유효해야 저장 시작 (손 구간 회피)")
+                    help="연속 이 프레임 이상 유효해야 '확정'하고 추적을 시작한다 (손 구간 "
+                         "오검출 회피). 확정 전까지 모아둔 프레임도 확정되는 순간 같이 "
+                         "저장된다 — 버려지지 않는다.")
+    ap.add_argument("--track-grace", type=int, default=3,
+                    help="추적 중 연속으로 이 프레임까지는 놓쳐도(모션블러로 필터가 잠깐 "
+                         "튐 등) 물체가 사라진 걸로 안 보고 계속 따라가며 저장한다. 넘으면 "
+                         "그때 추적을 끝내고 다음 확정을 기다린다.")
     ap.add_argument("--min-area", type=int, default=80)
     ap.add_argument("--max-area-frac", type=float, default=0.25,
                     help="프레임 대비 최대 면적. 넘으면 손/사람으로 본다")
@@ -137,7 +143,8 @@ def main() -> int:
     out_lbl.mkdir(parents=True, exist_ok=True)
 
     cam = camlib.open_camera(args.camera, exposure_us=args.exposure_us, gain=args.gain,
-                              auto_lock=args.auto_lock_exposure)
+                              auto_lock=args.auto_lock_exposure,
+                              max_exposure_us=args.max_exposure_us, max_gain=args.max_gain)
     frame, _ = cam.read()
     H, W = frame.shape[:2]
     finder = BlobFinder(cv2, args, W * H)
@@ -153,9 +160,26 @@ def main() -> int:
 
     saved = 0
     streak = 0
+    tracking = False
+    miss = 0
+    pending: list[tuple[np.ndarray, tuple[int, int, int, int]]] = []
     paused = False
     reasons: dict[str, int] = {}
     fps_log: list[float] = []
+
+    def _save(save_frame: np.ndarray, save_box: tuple[int, int, int, int]) -> None:
+        nonlocal saved
+        x, y, w, h = save_box
+        name = f"{session}_{saved:05d}"
+        cv2.imwrite(str(out_img / f"{name}.jpg"), save_frame,
+                    [cv2.IMWRITE_JPEG_QUALITY, 95])
+        # YOLO 포맷: class cx cy w h  (0~1 정규화)
+        (out_lbl / f"{name}.txt").write_text(
+            f"{cls_id} {(x + w / 2) / W:.6f} {(y + h / 2) / H:.6f} "
+            f"{w / W:.6f} {h / H:.6f}\n", encoding="utf-8")
+        saved += 1
+        beep()
+
     try:
         for i in range(args.warmup):
             f, _ = cam.read()
@@ -178,20 +202,39 @@ def main() -> int:
             # 학습률 0: 물체가 배경으로 흡수되지 않게 고정한다.
             mask, box, why = finder(frame, learning_rate=0.0)
             reasons[why] = reasons.get(why, 0) + 1
-            streak = streak + 1 if box else 0
 
-            good = bool(box) and streak >= args.arm_frames
-            if good:
-                x, y, w, h = box
-                name = f"{session}_{saved:05d}"
-                cv2.imwrite(str(out_img / f"{name}.jpg"), frame,
-                            [cv2.IMWRITE_JPEG_QUALITY, 95])
-                # YOLO 포맷: class cx cy w h  (0~1 정규화)
-                (out_lbl / f"{name}.txt").write_text(
-                    f"{cls_id} {(x + w / 2) / W:.6f} {(y + h / 2) / H:.6f} "
-                    f"{w / W:.6f} {h / H:.6f}\n", encoding="utf-8")
-                saved += 1
-                beep()
+            good = False   # 이번 프레임이 저장(또는 확정 대기 보관)에 반영됐는지 — 표시용
+            if not tracking:
+                # 아직 확정 전 — 연속 유효 프레임을 모으기만 한다 (손이 막 놓은
+                # 순간의 우연한 블롭 하나로 오검출되는 걸 막는다).
+                if box:
+                    streak += 1
+                    pending.append((frame.copy(), box))
+                    good = True
+                    if streak >= args.arm_frames:
+                        # 확정 — 그동안 모아둔 프레임까지 전부 저장하고 추적 시작.
+                        # 예전엔 이 프레임들이 그냥 버려졌다.
+                        for pframe, pbox in pending:
+                            _save(pframe, pbox)
+                        pending.clear()
+                        tracking = True
+                        miss = 0
+                else:
+                    streak = 0
+                    pending.clear()
+            else:
+                # 확정된 물체를 추적 중 — 사라질 때까지 매 프레임 저장한다.
+                if box:
+                    miss = 0
+                    _save(frame, box)
+                    good = True
+                else:
+                    miss += 1
+                    if miss > args.track_grace:
+                        # 유예 프레임을 넘게 놓쳤다 — 물체가 진짜로 사라진 것으로 본다.
+                        tracking = False
+                        streak = 0
+                        miss = 0
 
             # 그리기와 창 전송은 --display 일 때만 한다. 원격 접속에서는 이 블록
             # 하나가 나머지 전부를 합친 것보다 비싸다 — 프레임당 6MB 넘게 나간다.

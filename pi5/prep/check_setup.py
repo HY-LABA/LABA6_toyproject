@@ -55,13 +55,15 @@ def check_packages() -> list[str]:
 
 
 def check_camera(profile: str, exposure_us: int | None, gain: float | None,
-                  auto_lock: bool = False) -> bool:
+                  auto_lock: bool | None = None,
+                  max_exposure_us: int | None = None, max_gain: float | None = None) -> bool:
     spec = camlib.SPECS[profile]
     print(f"  프로파일: {spec.name} — {spec.width}x{spec.height} @{spec.fps}fps, "
           f"캘리브레이션 모델 = {spec.calib_model}")
     try:
         cam = camlib.open_camera(profile, exposure_us=exposure_us, gain=gain,
-                                  auto_lock=auto_lock)
+                                  auto_lock=auto_lock,
+                                  max_exposure_us=max_exposure_us, max_gain=max_gain)
     except Exception as exc:  # noqa: BLE001
         return _check("카메라 열기", False, str(exc))
     try:
@@ -113,7 +115,8 @@ def main() -> int:
     cam_ok = True
     if not args.skip_camera:
         print("\n=== 카메라 ===")
-        cam_ok = check_camera(args.camera, args.exposure_us, args.gain, args.auto_lock_exposure)
+        cam_ok = check_camera(args.camera, args.exposure_us, args.gain, args.auto_lock_exposure,
+                               args.max_exposure_us, args.max_gain)
 
     print("\n=== 요약 ===")
     if missing:
