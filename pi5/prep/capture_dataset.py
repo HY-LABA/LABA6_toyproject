@@ -3,6 +3,10 @@
     python capture_dataset.py --label can --camera csi
     python capture_dataset.py --label pet_bottle --session-note "복도 형광등"
 
+    # SSH/VNC 로 접속했다면 반드시 이렇게. 창을 원격으로 보내는 비용이
+    # 프레임률을 10분의 1로 떨어뜨린다 (TROUBLESHOOTING.md 3번)
+    python capture_dataset.py --label pet_bottle --no-display
+
 동작: 카메라를 고정하고 천장을 향하게 둔 뒤, 물체를 떨어뜨린다. 배경(천장)은 정지해 있고
 움직이는 건 물체뿐이므로 MOG2가 물체만 골라낸다. 클래스는 --label로 미리 알려주므로
 사람이 라벨을 찍을 필요가 없다.
@@ -39,6 +43,9 @@ import argparse
 import datetime as dt
 import json
 import pathlib
+import statistics
+import sys
+import time
 
 import numpy as np
 
@@ -46,6 +53,13 @@ import camera as camlib
 
 CLASSES = ["can", "pet_bottle", "paper_cup"]   # catcher/config.py TARGET_CLASSES와 순서 일치
 ROOT = pathlib.Path("dataset_raw")
+
+
+def beep() -> None:
+    """저장될 때마다 소리로 알린다. --no-display 로 돌리면 이게 유일한 즉시 피드백이다
+    (그리고 어차피 던지는 사람은 화면 앞이 아니라 방 건너편에 있다)."""
+    sys.stdout.write("\a")
+    sys.stdout.flush()
 
 
 class BlobFinder:
@@ -97,6 +111,9 @@ def main() -> int:
     camlib.add_profile_arg(ap)
     ap.add_argument("--label", required=True, choices=CLASSES, help="이번 세션에서 떨어뜨릴 물체")
     ap.add_argument("--session-note", default="", help="배경/조명 메모 (다양성 추적용)")
+    ap.add_argument("--no-display", dest="display", action="store_false",
+                    help="창을 띄우지 않는다. SSH/VNC 로 접속했다면 반드시 붙일 것 — "
+                         "X11 로 프레임을 보내는 비용이 30fps를 3fps로 떨어뜨린다")
     ap.add_argument("--warmup", type=int, default=60, help="배경 학습 프레임 수")
     ap.add_argument("--arm-frames", type=int, default=2,
                     help="연속 이 프레임 이상 유효해야 저장 시작 (손 구간 회피)")
@@ -126,7 +143,10 @@ def main() -> int:
     cls_id = CLASSES.index(args.label)
 
     print(f"\n세션 {session}   클래스 {args.label}(id={cls_id})")
-    print("[조작]  SPACE 일시정지/재개   R 배경 재학습   Q 종료")
+    if args.display:
+        print("[조작]  SPACE 일시정지/재개   R 배경 재학습   Q 종료")
+    else:
+        print("[조작]  Ctrl+C 종료   (창 없음 — 저장될 때마다 비프음이 난다)")
     print(f"[순서]  ① 카메라 고정 ② 워밍업 {args.warmup}프레임 동안 화면 비우기 "
           f"③ 물체 투척 반복\n")
 
@@ -134,6 +154,7 @@ def main() -> int:
     streak = 0
     paused = False
     reasons: dict[str, int] = {}
+    fps_log: list[float] = []
     try:
         for i in range(args.warmup):
             f, _ = cam.read()
@@ -143,6 +164,7 @@ def main() -> int:
         print("  워밍업 완료 — 이제 던져도 된다\n")
 
         n = 0
+        fps_t0 = time.monotonic()
         while args.max_frames == 0 or n < args.max_frames:
             frame, _ = cam.read()
             n += 1
@@ -157,44 +179,65 @@ def main() -> int:
             reasons[why] = reasons.get(why, 0) + 1
             streak = streak + 1 if box else 0
 
-            view = frame.copy()
-            if box:
+            good = bool(box) and streak >= args.arm_frames
+            if good:
                 x, y, w, h = box
-                good = streak >= args.arm_frames
-                color = (0, 255, 0) if good else (0, 200, 255)
-                cv2.rectangle(view, (x, y), (x + w, y + h), color, 2)
-                if good:
-                    name = f"{session}_{saved:05d}"
-                    cv2.imwrite(str(out_img / f"{name}.jpg"), frame,
-                                [cv2.IMWRITE_JPEG_QUALITY, 95])
-                    # YOLO 포맷: class cx cy w h  (0~1 정규화)
-                    (out_lbl / f"{name}.txt").write_text(
-                        f"{cls_id} {(x + w / 2) / W:.6f} {(y + h / 2) / H:.6f} "
-                        f"{w / W:.6f} {h / H:.6f}\n", encoding="utf-8")
-                    saved += 1
-            else:
-                cv2.putText(view, why, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                name = f"{session}_{saved:05d}"
+                cv2.imwrite(str(out_img / f"{name}.jpg"), frame,
+                            [cv2.IMWRITE_JPEG_QUALITY, 95])
+                # YOLO 포맷: class cx cy w h  (0~1 정규화)
+                (out_lbl / f"{name}.txt").write_text(
+                    f"{cls_id} {(x + w / 2) / W:.6f} {(y + h / 2) / H:.6f} "
+                    f"{w / W:.6f} {h / H:.6f}\n", encoding="utf-8")
+                saved += 1
+                beep()
 
-            cv2.putText(view, f"{args.label}  saved={saved}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.imshow("capture", view)
-            cv2.imshow("mask", cv2.resize(mask, (W // 2, H // 2)))
+            # 그리기와 창 전송은 --display 일 때만 한다. 원격 접속에서는 이 블록
+            # 하나가 나머지 전부를 합친 것보다 비싸다 — 프레임당 6MB 넘게 나간다.
+            if args.display:
+                view = frame.copy()
+                if box:
+                    x, y, w, h = box
+                    color = (0, 255, 0) if good else (0, 200, 255)
+                    cv2.rectangle(view, (x, y), (x + w, y + h), color, 2)
+                else:
+                    cv2.putText(view, why, (10, 60), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7, (0, 0, 255), 2)
+                cv2.putText(view, f"{args.label}  saved={saved}", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                cv2.imshow("capture", view)
+                cv2.imshow("mask", cv2.resize(mask, (W // 2, H // 2)))
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                break
-            if key == ord(" "):
-                paused = True
-            if key == ord("r"):
-                finder = BlobFinder(cv2, args, W * H)
-                print("  배경 재학습 — 화면을 비워라")
-                for _ in range(args.warmup):
-                    f, _ = cam.read()
-                    finder(f, learning_rate=-1)
-                print("  완료")
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
+                    break
+                if key == ord(" "):
+                    paused = True
+                if key == ord("r"):
+                    finder = BlobFinder(cv2, args, W * H)
+                    print("  배경 재학습 — 화면을 비워라")
+                    for _ in range(args.warmup):
+                        f, _ = cam.read()
+                        finder(f, learning_rate=-1)
+                    print("  완료")
+
+            # 실효 프레임률. 창이 없으면 비프음 말고는 이게 유일한 피드백이고,
+            # 창이 있어도 전송이 프레임을 잡아먹는지는 이 숫자로만 알 수 있다.
+            # 놓친 프레임은 그대로 투척당 수집 장수의 손실이다.
+            if n % 30 == 0:
+                now = time.monotonic()
+                fps = 30.0 / max(1e-6, now - fps_t0)
+                fps_t0 = now
+                fps_log.append(fps)
+                print(f"  {fps:5.1f} fps   saved={saved}   최근={why}")
+    except KeyboardInterrupt:
+        # Ctrl+C 로 끊어도 통계와 sessions.json 은 남겨야 한다. 사진 자체는
+        # 프레임마다 즉시 쓰이므로 이미 디스크에 있다.
+        print("\n  Ctrl+C — 중단한다. 저장된 사진은 그대로 남아 있다.")
     finally:
         cam.close()
-        cv2.destroyAllWindows()
+        if args.display:
+            cv2.destroyAllWindows()
 
     manifest = ROOT / "sessions.json"
     data = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else {}
@@ -203,8 +246,22 @@ def main() -> int:
                      "image_size": [W, H]}
     manifest.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print(f"\n{saved}장 저장 -> {out_img}")
+    # 절대경로로 찍는다. ROOT 가 상대경로라 실행 디렉토리에 따라 위치가 바뀌고,
+    # 그 때문에 "폴더는 생겼는데 사진을 못 찾겠다"가 실제로 한 번 발생했다.
+    print(f"\n{saved}장 저장 -> {out_img.resolve()}")
     print(f"기각 사유: {dict(sorted(reasons.items(), key=lambda kv: -kv[1]))}")
+
+    if fps_log:
+        avg = statistics.mean(fps_log)
+        print(f"실효 프레임률: 평균 {avg:.1f} fps  (카메라 설정 {cam.spec.fps} fps)")
+        if avg < cam.spec.fps * 0.7:
+            print("⚠ 프레임을 놓치고 있다 — 투척당 잡히는 장수가 그만큼 줄어든다.")
+            if args.display:
+                print("   원격 접속(SSH/VNC) 중이라면 --no-display 를 붙여라.")
+            else:
+                print("   창이 없는데도 느리다면 MOG2/모폴로지가 풀해상도라 무겁다는 뜻이다.")
+                print("   camera.py 에서 더 낮은 해상도 프로파일을 쓰는 것을 검토할 것.")
+
     multi_count = sum(v for k, v in reasons.items() if k.startswith("multi"))
     if multi_count > saved:
         print("⚠ 'multi'가 많다 — 손이 오래 잡히고 있다. 더 빨리 손을 빼거나 위에서 놓아라.")
