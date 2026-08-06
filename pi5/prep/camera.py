@@ -116,6 +116,17 @@ class Camera:
             controls={"FrameRate": float(self.spec.fps)},
         )
         cam.configure(cfg)
+        try:
+            # libcamera 기본 노이즈 리덕션은 여러 프레임을 섞어(temporal blending)
+            # 잡음을 줄인다. MOG2 입장에선 최악이다 — 물체가 지나간 자리에 몇 프레임
+            # 동안 잔상이 남아 "하얀 덩어리가 천천히 검게 줄어드는" 것처럼 보인다.
+            # 배경차분은 프레임끼리 절대 안 섞여야 하므로 끈다.
+            from libcamera import controls as libcontrols
+            cam.set_controls(
+                {"NoiseReductionMode": libcontrols.draft.NoiseReductionModeEnum.Off})
+        except Exception as exc:  # noqa: BLE001
+            print(f"[camera] NoiseReductionMode 끄기 실패 ({exc}) — "
+                  f"MOG2 마스크에 잔상이 남을 수 있다.")
         cam.start()
         time.sleep(1.0)                      # AWB/AGC 안정화 (기본은 auto로 뜬다)
 
