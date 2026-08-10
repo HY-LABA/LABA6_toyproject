@@ -69,16 +69,19 @@ SPECS: dict[str, CameraSpec] = {
     ),
     # 지금 쓰는 것 — 도착해서 장착 완료 (2026-08-06) ─────────────────────────
     "gs": CameraSpec(
-        name="CAM-IMX296Color-GS + M12 2.8mm", width=1456, height=1088, fps=60,
-        calib_model="fisheye", exposure_us=1000, gain=4.0,
+        name="Raspberry Pi Global Shutter Camera (IMX296) + 6mm CS 렌즈",
+        width=1456, height=1088, fps=60,
+        calib_model="pinhole", exposure_us=1000, gain=4.0,
         max_exposure_us=1000, max_gain=16.0,   # auto_lock이 그 이상으로 늘리지 못하게
-                                                # 상한을 exposure_us와 같이 잡아뒀다 —
-                                                # 이 1000µs는 data_collection이 이미
-                                                # 검증한 값이라 auto가 함부로 못 늘려야 한다.
-        note="글로벌 셔터라 롤링 셔터 왜곡은 없다 — 다만 모션 블러 자체는 노출시간에 "
-             "그대로 비례하므로 셔터 우선 상한은 여전히 필요하다. 대각 140° 어안이라 "
-             "반드시 fisheye로 캘리브레이션할 것. exposure_us/gain=1000/4.0은 "
-             "data_collection/brain/capture/source.py에서 검증된 값.",
+                                                # 상한을 exposure_us와 같이 잡아뒀다.
+        note="Sony IMX296, 1456x1088, 픽셀 3.45µm, 센서 대각 6.3mm, 글로벌 셔터, "
+             "최대 60fps, C/CS 마운트. 6mm 렌즈에서 f_px=6.0/3.45µm=1739, "
+             "화각 수평45°/수직35°/대각55°. 렌즈 이름의 '광각'은 HQ 카메라(대각 7.9mm) "
+             "기준이고 이 센서(6.3mm)에서는 오히려 표준에 가깝다 — **대각 55°라 "
+             "pinhole로 캘리브레이션한다. 어안 아니다.** 글로벌 셔터라 낙하 물체가 "
+             "기울어지지 않고, 픽셀이 커서(IMX219의 3배) 노출을 아주 짧게 가져갈 수 "
+             "있다(제조사 표기 최소 30µs). 모션 블러가 줄면 검출 노이즈가 줄고 그게 "
+             "곧 깊이 추정 정확도다 — 이 카메라의 가장 큰 이점.",
     ),
     # 지금 쓰는 것 — IMX219 + M12 교환식 렌즈 (2026-08-10) ──────────────────
     "imx219m12": CameraSpec(
@@ -101,7 +104,7 @@ SPECS: dict[str, CameraSpec] = {
     ),
 }
 
-DEFAULT = "imx219m12"
+DEFAULT = "gs"
 
 
 class Camera:
