@@ -4,8 +4,10 @@
 
 ## 문서 구성
 
-- [`docs/architecture.md`](docs/architecture.md) — 소프트웨어 파일 구조, 언어 선정, 파일별 상세 설명
-- [`docs/algorithm.md`](docs/algorithm.md) — 관측·예측 로직, 재보정 루프, vx/vy 정의, 단위 결정
+- [`architecture.md`](architecture.md) — 파일 구조, 파일별 책임, 파이5↔피코 역할 분담
+- [`algorithm.md`](algorithm.md) — 궤적 추정 수식, 관측 스팬, 제어 루프, 검증된 성능
+- [`system_flow.md`](system_flow.md) — pi5↔pico 파이프라인 흐름 + 구현 상태
+- [`pi5/prep/TROUBLESHOOTING.md`](pi5/prep/TROUBLESHOOTING.md) — 실기 작업 기록 (겪은 문제와 해결)
 
 ## 하드웨어 구성
 
