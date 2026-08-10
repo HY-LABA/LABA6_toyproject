@@ -69,13 +69,18 @@ SPECS: dict[str, CameraSpec] = {
     ),
     # 지금 쓰는 것 — 도착해서 장착 완료 (2026-08-06) ─────────────────────────
     "gs": CameraSpec(
-        name="Raspberry Pi Global Shutter Camera (IMX296) + 6mm CS 렌즈",
+        name="InnoMaker CAM-IMX296Color-GS + 6mm CS 렌즈",
         width=1456, height=1088, fps=60,
         calib_model="pinhole", exposure_us=1000, gain=4.0,
         max_exposure_us=1000, max_gain=16.0,   # auto_lock이 그 이상으로 늘리지 못하게
                                                 # 상한을 exposure_us와 같이 잡아뒀다.
-        note="Sony IMX296, 1456x1088, 픽셀 3.45µm, 센서 대각 6.3mm, 글로벌 셔터, "
-             "최대 60fps, C/CS 마운트. 6mm 렌즈에서 f_px=6.0/3.45µm=1739, "
+        note="라즈베리파이 공식 GS 카메라와 동일 스펙(제조사가 호환품으로 표기). "
+             "Sony IMX296 Color, 1456x1088, 픽셀 3.45µm, 센서 대각 6.3mm(1/2.9\"), "
+             "글로벌 셔터, 최대 60fps, C/CS 마운트, 최소 노출 30µs. "
+             "출력이 YUV라 공식(RAW10)과 다르지만 libcamera가 변환하므로 "
+             "RGB888 요청 그대로 쓰면 된다. 외부 하드웨어 트리거도 지원하나 "
+             "센서 타임스탬프로 충분해서 쓰지 않는다. "
+             "6mm 렌즈에서 f_px=6.0/3.45µm=1739, "
              "화각 수평45°/수직35°/대각55°. 렌즈 이름의 '광각'은 HQ 카메라(대각 7.9mm) "
              "기준이고 이 센서(6.3mm)에서는 오히려 표준에 가깝다 — **대각 55°라 "
              "pinhole로 캘리브레이션한다. 어안 아니다.** 글로벌 셔터라 낙하 물체가 "
