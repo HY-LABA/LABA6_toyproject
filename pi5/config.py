@@ -60,6 +60,12 @@ CAMERA_DISTORTION: tuple[float, ...] | None = None  # 정해야함: 캘리브레
 YOLO_MODEL_PATH: str | None = None  # 정해야함: 학습 후 .hef 경로
 YOLO_CONF_THRESHOLD = 0.5
 
+# 추론 입력 크기. **학습에 쓴 값과 반드시 같아야 한다** (prep/train_yolo.py --imgsz).
+# 다르면 변환도 되고 추론도 되는데 정확도만 조용히 떨어진다 — 그리고 이 시스템에서
+# 정확도 저하는 곧 bbox 중심 노이즈이고, 그게 깊이 추정을 지배한다.
+# train_yolo.py 가 학습 끝날 때 실제 사용값을 출력하니 그걸 그대로 넣을 것.
+YOLO_IMGSZ = 640
+
 # 클래스가 하나다. 종류를 구분해도 쓸 데가 없고(크기 기준값이 필요 없어졌으므로),
 # 클래스를 늘리면 수집 노동만 배로 늘어난다.
 TARGET_CLASS = "trash"

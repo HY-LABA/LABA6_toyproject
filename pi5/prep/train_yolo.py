@@ -133,12 +133,23 @@ def main() -> int:
     if not best.exists():
         print("⚠ best.pt 를 찾지 못했다 — 학습이 중간에 끊겼는지 확인하라.")
 
+    # 실제로 학습에 쓰인 imgsz. --resume 이면 체크포인트에 저장된 값으로 학습되므로
+    # args.imgsz(기본 640)와 다를 수 있고, 그대로 export 하면 **조용히** 어긋난 크기의
+    # ONNX가 나온다 (변환도 되고 추론도 되는데 정확도만 떨어진다). trainer 가 실제
+    # 사용값을 들고 있으니 그걸 쓴다.
+    trained_imgsz = getattr(model.trainer.args, "imgsz", args.imgsz)
+    if trained_imgsz != args.imgsz:
+        print(f"  (학습에 쓰인 imgsz={trained_imgsz} — 체크포인트 복원값을 따른다)")
+
     if args.export_onnx and best.exists():
         # NMS는 모델에 넣지 않는다 — Hailo는 NMS를 호스트(파이5)에서 돌리는 걸
         # 전제하고, 모델에 박혀 있으면 컴파일이 막힌다. ultralytics 기본값이
         # NMS 미포함이라 그대로 두면 된다.
-        YOLO(str(best)).export(format="onnx", imgsz=args.imgsz, opset=12)
-        print("ONNX 내보내기 완료 — 다음은 Hailo Dataflow Compiler로 .hef 변환")
+        YOLO(str(best)).export(format="onnx", imgsz=trained_imgsz, opset=12)
+        print(f"ONNX 내보내기 완료 (imgsz={trained_imgsz}) — "
+              f"다음은 Hailo Dataflow Compiler로 .hef 변환")
+        print(f"⚠ pi5/config.py 의 YOLO_IMGSZ 를 {trained_imgsz} 로 맞출 것 — "
+              f"추론 입력 크기가 다르면 정확도가 조용히 떨어진다")
 
     print("\n⚠ mAP가 좋아도 끝난 게 아니다. 이제 확인할 것:")
     print("   ① 실제로 던져서 궤적 피팅의 재투영 잔차(residual_px)를 볼 것")
