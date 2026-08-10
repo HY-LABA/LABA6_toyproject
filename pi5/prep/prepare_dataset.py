@@ -21,12 +21,13 @@ import random
 import shutil
 
 RAW = pathlib.Path("dataset_raw")
-CLASSES = ["can", "pet_bottle", "paper_cup"]
+# 단일 클래스 (2026-08-10). capture_dataset.py의 CLASSES와 반드시 같아야 한다.
+CLASSES = ["trash"]
 
 
 def class_of(session_name: str) -> str:
-    # 세션명 = f"{label}_{camera}_{stamp}". label 자체에 "_"가 들어가는
-    # pet_bottle/paper_cup은 앞 토큰 하나만 자르면 깨지므로 CLASSES와 매칭한다.
+    # 세션명 = f"{label}_{camera}_{stamp}". label에 "_"가 들어갈 수 있으므로
+    # 앞 토큰 하나만 자르지 않고 CLASSES와 매칭한다.
     for c in CLASSES:
         if session_name.startswith(c + "_"):
             return c

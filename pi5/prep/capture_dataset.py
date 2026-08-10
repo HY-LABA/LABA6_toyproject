@@ -51,7 +51,11 @@ import numpy as np
 
 import camera as camlib
 
-CLASSES = ["can", "pet_bottle", "paper_cup"]   # catcher/config.py TARGET_CLASSES와 순서 일치
+# 클래스가 하나다 (2026-08-10). 궤적 추정이 중력 기반으로 바뀌면서 물체의 실제
+# 크기를 알 필요가 없어졌고, 그러면 종류를 구분할 이유도 함께 사라졌다 — 예전에는
+# 클래스별 기준 크기(REFERENCE_SIZE_AT_1M)를 조회하려고 클래스가 필요했다.
+# 부수 효과로 pi5/config.py와의 클래스 순서 불일치 버그도 없어졌다.
+CLASSES = ["trash"]
 ROOT = pathlib.Path("dataset_raw")
 
 

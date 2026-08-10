@@ -9,10 +9,21 @@
   · 클래스 3개에 물체도 단순해서 큰 모델이 필요 없다
   · 정확한 bbox 회귀가 목표인데, 그건 모델 크기보다 **데이터 품질**에 더 좌우된다
 
-⚠ 이 시스템에서 중요한 지표는 mAP가 아니라 **bbox 폭 오차 σ_w**다.
-   `z = f·W_real/w_px` 이므로 폭 오차가 그대로 거리 오차가 된다.
-   학습이 끝나면 반드시 measure_sigma_w.py 로 확인할 것 (합격선 2 px).
-   (../docs/vision-pipeline.md 1장, 7장)
+Colab에서 돌릴 때:
+    !python train_yolo.py --data /content/dataset/dataset.yaml \
+        --project /content/drive/MyDrive/yolo_runs
+  · 데이터는 zip으로 Drive에 올려 /content(로컬 디스크)에 풀 것. Drive에 파일 수천
+    개를 풀어놓고 마운트해서 읽으면 학습보다 파일 읽기가 느리다.
+  · --project 를 Drive 안으로 주면 세션이 끊겨도 가중치가 남는다.
+
+⚠ 중요한 지표가 바뀌었다 (2026-08-10). 예전에는 bbox 폭 오차 σ_w가 합격 기준이었지만
+   (`z = f·W_real/w_px` 로 거리를 뽑았으므로), 깊이 추정이 중력 기반 궤적 최소제곱
+   (pi5/trajectory.py)으로 바뀌면서 **bbox 폭은 이제 안 쓴다.** 궤적 피팅의 유일한
+   입력은 bbox **중심(u,v)** 이다. 그래서:
+     · σ_w 합격선 2px → 폐기. 회전하는 물체에서 애초에 달성 불가능했다
+     · 대신 **중심 좌표 정확도**가 중요하다 → 재투영 잔차(residual_px)로 확인
+     · scale/degrees 증강을 좁게 잡던 이유도 약해졌지만, 중심 정확도에는 여전히
+       도움이 되므로 유지한다
 
 ┌─ 카메라 교체 시 ──────────────────────────────────────────────────────────┐
 │ 학습 코드는 그대로다. 데이터셋만 새로 만들어 --data 를 바꾸면 된다.        │
@@ -38,6 +49,10 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--patience", type=int, default=20)
     ap.add_argument("--device", default=None, help="'0' GPU, 'cpu'. 생략 시 자동")
+    ap.add_argument("--project", default=None,
+                    help="결과 저장 루트. Colab에서는 Drive 경로를 줄 것 "
+                         "(예: /content/drive/MyDrive/yolo_runs) — 세션이 끊겨도 "
+                         "가중치가 남는다. 생략하면 ultralytics 기본값 runs/detect.")
     ap.add_argument("--name", default="catcher")
     ap.add_argument("--export-onnx", action="store_true", help="학습 후 ONNX 내보내기")
     args = ap.parse_args()
@@ -63,17 +78,22 @@ def main() -> int:
         batch=args.batch,
         patience=args.patience,
         device=args.device,
+        project=args.project,
         name=args.name,
         # ── 증강 조정 ────────────────────────────────────────────────────
         # 물체가 대칭이고 방향 의미가 없으므로 반전은 안전하다.
         fliplr=0.5,
         flipud=0.5,
-        # bbox 크기가 곧 신호다. scale을 너무 넓히면 회귀 정밀도가 떨어질 수 있어
-        # 실제 z 범위(0.3~2.5m)에 해당하는 정도로만 둔다.
+        # 크기 증강을 넓게 주면 모델이 크기를 무시하도록 배우고, bbox 중심 회귀도
+        # 같이 흐려진다. 실제 z 범위(0.3~2.5m)에 해당하는 만큼만 둔다.
         scale=0.3,
+        # 회전 증강은 끈다. 회전시키면 축 정렬 bbox의 크기·중심이 물체와 무관하게
+        # 변해서 라벨에 노이즈를 주입하는 셈이 된다. 공중에서 병이 회전하는 것은
+        # 증강이 아니라 **실제 수집 데이터**로 담아야 한다.
+        degrees=0.0,
         # 실제 추론에는 모자이크가 없다. 마지막 10 에폭은 실제 분포로 마무리한다.
         close_mosaic=10,
-        # 색·회전은 기본값 유지 (천장 조명 변화에 강해진다)
+        # 색은 기본값 유지 (천장 조명 변화에 강해진다)
     )
 
     metrics = model.val()
@@ -85,16 +105,22 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         print("  (지표 파싱 실패 — ultralytics 버전 차이. 출력 로그를 직접 확인)")
 
-    best = pathlib.Path("runs/detect") / args.name / "weights/best.pt"
+    root = pathlib.Path(args.project) if args.project else pathlib.Path("runs/detect")
+    best = root / args.name / "weights/best.pt"
     print(f"\n가중치: {best}")
 
     if args.export_onnx and best.exists():
+        # NMS는 모델에 넣지 않는다 — Hailo는 NMS를 호스트(파이5)에서 돌리는 걸
+        # 전제하고, 모델에 박혀 있으면 컴파일이 막힌다. ultralytics 기본값이
+        # NMS 미포함이라 그대로 두면 된다.
         YOLO(str(best)).export(format="onnx", imgsz=args.imgsz, opset=12)
         print("ONNX 내보내기 완료 — 다음은 Hailo Dataflow Compiler로 .hef 변환")
 
-    print("\n⚠ mAP가 좋아도 끝난 게 아니다. 다음을 반드시 실행하라:")
-    print(f"   python measure_sigma_w.py --weights {best}")
-    print("   합격선: σ_w ≤ 2 px  (이게 거리 정확도를 결정한다)")
+    print("\n⚠ mAP가 좋아도 끝난 게 아니다. 이제 확인할 것:")
+    print("   ① 실제로 던져서 궤적 피팅의 재투영 잔차(residual_px)를 볼 것")
+    print("      2px 근처면 좋고, 4px 이상이면 config.MIN_TIME_SPAN_S를 늘려야 한다")
+    print("   ② 예측 착지점과 실제 착지점의 거리 — 이게 최종 성능이다")
+    print("   (σ_w 합격선 2px는 폐기됐다. bbox 폭을 더 이상 쓰지 않는다)")
     return 0
 
 

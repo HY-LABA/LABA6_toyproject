@@ -1,18 +1,31 @@
-"""σ_w 측정 — 이 파이프라인의 **합격 기준**을 확인한다.
+"""σ_w(bbox 폭 분산) 측정.
 
-    # ① 정지 물체를 알려진 거리에서 촬영 (라파이)
-    python measure_sigma_w.py capture --camera csi --label can --distance 2.0
+⚠⚠ **더 이상 합격 기준이 아니다 (2026-08-10).** ⚠⚠
 
-    # ② 학습된 모델로 bbox 폭 분산 측정 (PC)
+깊이 추정이 `z = f·W_real / w_px`(bbox 크기비율)에서 중력 기반 포물선 최소제곱
+(pi5/trajectory.py)으로 바뀌었다. 이제 궤적 추정에 쓰는 건 bbox **중심(u,v)** 뿐이고
+폭은 아무 데도 안 쓴다. 따라서 σ_w가 커도 시스템은 성립한다.
+
+바뀐 이유: 물체마다 실제 크기를 등록해야 했고, 물체를 500ml 페트병 하나로 고정해도
+공중에서 회전하면 보이는 폭이 3배까지 흔들려서(세로 65mm ↔ 가로 210mm) 크기비율
+방식으로는 거리를 안정적으로 못 뽑았다.
+
+**대신 봐야 할 지표:**
+
+  ① **재투영 잔차 (residual_px)** — pi5/trajectory.py의 `Fit.residual_px`.
+     추정한 궤적을 다시 화면에 투영해서 실제 관측과 몇 px 어긋나는지. 이게 곧
+     "검출 노이즈 + 렌즈 왜곡 + 모델 오차"의 총합이고, config.MAX_RESIDUAL_PX(6px)를
+     넘으면 그 트랙은 버려진다. 2px 근처면 좋고, 4px 이상이면 MIN_TIME_SPAN_S를
+     늘려야 한다.
+  ② **착지 예측 오차** — 실제로 던져서 예측 착지점과 실제 착지점의 거리를 잰다.
+     이게 최종 성능이다.
+
+이 스크립트는 참고용으로 남겨둔다 — bbox 폭 산포가 크면 검출 자체가 흔들린다는
+신호이므로 중심 좌표 품질의 간접 지표로는 여전히 쓸 만하다. 다만 **2px 합격선은
+이제 의미가 없다.**
+
+    python measure_sigma_w.py capture --label trash --distance 2.0
     python measure_sigma_w.py measure --weights runs/detect/catcher/weights/best.pt
-
-왜 mAP가 아니라 이걸 보는가:
-    z = f_px · W_real / w_px    이므로 bbox 폭 오차가 그대로 거리 오차다.
-    σ_w = 2 px 가정 위에 ../docs/physics.md 의 모든 정확도 계산이 서 있다.
-    mAP 0.99여도 폭이 5 px씩 흔들리면 시스템은 성립하지 않는다.
-    (../docs/vision-pipeline.md 1장, 7장)
-
-**양자화 전후로 각각 측정하라.** Hailo INT8 변환이 bbox 회귀를 떨어뜨릴 수 있다.
 """
 
 from __future__ import annotations
@@ -116,17 +129,17 @@ def cmd_measure(args) -> int:
         return 1
     worst = max(overall)
     print("-" * 82)
-    print(f"\n최대 σ_w = {worst:.2f} px   합격선 2.0 px")
-    if worst <= 2.0:
-        print("  ✅ 통과 — physics.md 의 정확도 계산이 그대로 성립한다")
-    else:
-        print(f"  ❌ 초과 — σ_z 가 {worst/2:.1f}배로 늘어난다. 되돌아가서 확인할 것:")
-        print("     · 라벨 일관성 (review_labels.py 로 폭이 들쭉날쭉한지)")
-        print("     · 작은 물체(먼 거리) 학습 샘플이 충분한지")
-        print("     · 모션 블러가 섞이지 않았는지")
-    print("\n'편향' 열이 한 방향으로 치우쳐 있으면 계통 오차다.")
-    print("catcher/config.py 의 OBJECT_SIZE_M 을 그만큼 보정하면 흡수된다 —")
-    print("일관된 편향은 괜찮지만 들쭉날쭉한 산포(σ_w)는 못 없앤다.")
+    print(f"\n최대 σ_w = {worst:.2f} px")
+    print("  ⚠ 이 숫자에 합격선은 더 이상 없다 — 깊이 추정이 bbox 폭을 안 쓴다.")
+    print("    (2026-08-10 중력 기반 궤적 최소제곱으로 전환. 파일 상단 주석 참고)")
+    if worst > 4.0:
+        print(f"  다만 {worst:.1f}px는 검출 자체가 흔들린다는 신호다. bbox 중심도 같이")
+        print("    떨릴 가능성이 높고, 그건 궤적 피팅의 유일한 입력이므로 확인할 것:")
+        print("     · 모션 블러 (노출을 줄이고 게인을 올려라)")
+        print("     · 라벨 일관성 (review_labels.py)")
+        print("     · 먼 거리(작은 물체) 학습 샘플 부족")
+    print("\n진짜 봐야 할 지표는 궤적 피팅의 재투영 잔차(residual_px)와")
+    print("실제 투척 시 착지 예측 오차다.")
     return 0
 
 
@@ -136,7 +149,7 @@ def main() -> int:
 
     c = sub.add_parser("capture", help="정지 물체를 알려진 거리에서 촬영")
     camlib.add_profile_arg(c)
-    c.add_argument("--label", required=True, choices=["can", "pet_bottle", "paper_cup"])
+    c.add_argument("--label", required=True, choices=["trash"])
     c.add_argument("--distance", type=float, required=True, help="카메라~물체 실측 거리(m)")
     c.add_argument("--frames", type=int, default=100)
     c.set_defaults(func=cmd_capture)
