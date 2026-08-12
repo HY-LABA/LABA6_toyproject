@@ -3,7 +3,24 @@
 파이5가 하는 일은 하나다. **"어디로, 얼마나 빨리 가야 하는가"를 결정한다.**
 모터를 어떻게 돌릴지는 [피코](pico-control.md)가 맡는다.
 
-관련 문서: [비전 파이프라인](vision-pipeline.md) · [물리 계산](physics.md) · [하드웨어](hardware.md) · [통신 프로토콜](protocol.md)
+관련 문서: [알고리즘(구현 기준)](../algorithm.md) · [비전 파이프라인](vision-pipeline.md) ·
+[물리 계산](physics.md) · [하드웨어](hardware.md) · [통신 프로토콜](protocol.md)
+
+> ## ⚠ 궤적 추정 방식이 2026-08-10에 바뀌었다
+>
+> **구현 기준 문서는 [`../algorithm.md`](../algorithm.md)다.** 이 문서와 충돌하면
+> 그쪽이 맞다.
+>
+> | | 이 문서 (예전 설계) | 현재 구현 |
+> |---|---|---|
+> | 깊이 | bbox 폭 ÷ 실물 치수 (2.4절) | **중력 기반 선형 최소제곱** |
+> | 추정기 | 6상태 칼만필터 | 매 프레임 전체 재피팅 |
+> | 필요 입력 | bbox 폭 + 클래스별 실물 크기 | **bbox 중심 (u,v)** 뿐 |
+>
+> **아직 유효한 것:** 2.1~2.3 좌표계와 어안 역투영, 2.5 카메라 오프셋,
+> 4장 SEARCH/TRACK과 타이밍 예산, 6~7장 통신·제어.
+> **폐기된 것:** 2.4 z 추정, 5장 칼만필터, 8~9장 파일 구조/이행 계획,
+> 10장 파라미터 중 크기 관련 항목.
 
 ---
 
@@ -67,13 +84,16 @@ Z는 회전 영향이 없으므로 `Z_W = Z_B` (로봇이 기울지 않는다는
    θ     = 2·asin( r / (2·f_px) )        ← 등입체각 역변환 (핀홀이면 atan(r/f_px))
    φ     = atan2( −(v − v₀), u − u₀ )    ← v축 부호 반전에 주의
 
-② bbox 폭 -> 직선거리 R
-   f_local = f_px · cos(θ/2)             ← 국소 배율. 가장자리에서 최대 18% 작다
-   R       = f_local · W_real / w_px
+② 방향 -> 핀홀 등가 픽셀 (현재 구현이 쓰는 형태)
+   u' = u₀ + (u−u₀)·f_px·tanθ / r        ← ../pi5/fisheye.py 의 to_pinhole_px
+   이걸 trajectory.fit_trajectory 에 넣으면 거리는 중력이 정해준다.
 
-③ 방향 × 거리 -> body 좌표
+③ (폐기) 방향 × 거리 -> body 좌표
    x_B = R·sinθ·cosφ ,  y_B = R·sinθ·sinφ ,  z_B = R·cosθ
 ```
+
+**①의 θ 계산은 그대로 유효하다.** 바뀐 건 그 뒤다 — 예전엔 bbox 폭으로 거리 R을 따로
+구해 방향에 곱했지만, 지금은 **방향만 넘기고 거리는 중력 제약이 정한다.**
 
 θ가 작으면 핀홀 식으로 수렴한다. 화면 중앙만 쓰면 차이가 없지만, 광각의 이점을 살리려면
 반드시 이 형태를 써야 한다 — 핀홀로 계산하면 입사각 42°에서 z가 79% 틀린다.
@@ -81,43 +101,38 @@ Z는 회전 영향이 없으므로 `Z_W = Z_B` (로봇이 기울지 않는다는
 `(u₀, v₀)`는 **주점(principal point)**이며 1456×1088에서 대략 이미지 중심 (728, 544)이다.
 정확한 값은 **`cv2.fisheye.calibrate`**로 구한다.
 
-> ⚠ **구코드([`pi5/vision.py`](../pi5/vision.py))의 버그:** `_pixel_to_meters_xy`가
-> `cx_px * z / f`로 주점을 빼지 않고, y축 부호 반전도 없으며, 핀홀을 가정한다.
-> 새 구현([`catcher/frames.py`](../catcher/frames.py))에서 모두 해결했다.
+> ⚠ **주점을 빼는 것과 y축 부호 반전을 빠뜨리기 쉽다.** 현재 `pi5/trajectory.py`는
+> `a = u − cx`, `b = v − cy` 형태로 주점을 명시적으로 뺀다.
+> 어안 보정이 필요한 경우는 [`../pi5/fisheye.py`](../pi5/fisheye.py)를 거친다.
 
 조립 후 카메라가 규약에서 ψ만큼 틀어졌다면 `config.CAMERA_YAW_RAD`에 넣고 2D 회전으로
 보정한다.
 
-### 2.4 z 추정 — 실물 치수 기반
+### 2.4 z 추정 — ~~실물 치수 기반~~ → 폐기됨
 
-현재 코드는 "1 m 거리에서의 bbox 픽셀 크기" DB(`REFERENCE_SIZE_AT_1M`)를 쓴다. 이 방식은 렌즈나 해상도를 바꾸면 DB 전체를 다시 실측해야 한다. **실물 치수(m)를 넣고 f_px로 계산하는 방식으로 바꾼다:**
+> **이 절의 전제가 틀렸다.** 기록으로 남기되 구현하지 않는다.
+> 현재 방식은 [`../algorithm.md`](../algorithm.md)와
+> [`../pi5/trajectory.py`](../pi5/trajectory.py)를 볼 것.
 
-```
-R = f_px·cos(θ/2) × W_real / w_px     ← w_px 는 bbox '폭' (높이 아님)
-```
+이 문서는 원래 이렇게 주장했다:
 
-(θ는 2.3절의 입사각. 중심부에서는 `R ≈ z = f_px·W_real/w_px`로 수렴한다)
+> **단안 카메라에서 크기 정보는 유일한 스케일 소스다.** 각도만으로는 "가까운 작은 물체"와
+> "먼 큰 물체"를 구분할 수 없다.
 
-`config.OBJECT_SIZE_M = {"can": {"w": 0.066, "h": 0.122}, ...}` — 줄자로 한 번 재면 끝이고,
-렌즈를 바꿔도 `f_px`만 갱신하면 된다.
+**한 프레임만 보면 맞는 말이지만, 여러 프레임을 보면 틀렸다.** 각도의 *시간 변화*에는
+스케일 정보가 들어 있다. 물체는 임의로 움직이는 게 아니라 **중력을 따라** 움직이고,
+중력은 물체가 뭐든 9.8 m/s²로 고정이기 때문이다. "이 각도 변화가 9.8의 중력으로
+만들어지려면 거리가 얼마여야 하는가"를 풀면 스케일이 유일하게 정해진다.
 
-**bbox 폭을 쓴다 — 높이가 아니다.**
-글로벌 셔터라 기하 왜곡은 없으므로(롤링 셔터였다면 높이가 2% 왜곡됐다,
-[physics.md 7.1장](physics.md#71-글로벌-셔터의-이점)) 선택 기준은 **물체 자세**다.
-폭이 물체의 짧은 치수(캔 66 mm)에 대응해 회전에 덜 민감하다.
+즉 **크기 대신 중력을 자로 쓴다.** 그래서 물체의 실제 치수를 알 필요가 없다.
 
-**자세 의존성 문제:** 캔을 눕히면 보이는 폭이 66 mm가 아니라 122 mm다. 물체가 회전하며
-떨어지면 z 추정이 흔들린다. 대책:
+폐기한 실제 이유는 정확도였다. 크기비율 방식은 **물체 자세에 지배당한다** — 캔을 눕히면
+보이는 폭이 66 mm가 아니라 122 mm이고, 500 ml 페트병은 65 mm ↔ 210 mm로 **3배**까지
+흔들린다. 회전하며 떨어지는 물체에서는 이 오차가 백색잡음이 아니라 **상관 잡음**이라
+필터로도 못 지운다.
 
-- 폭이 물체의 **짧은 치수**에 가까운지 확인하고, bbox 종횡비로 자세를 판별해
-  해당 치수를 골라 쓴다
-- 이 오차는 백색잡음이 아니라 상관 잡음이라 칼만필터가 완전히는 못 지운다.
-  측정 노이즈 R을 넉넉히 잡고, 리스크로 인지해 둔다
-  ([open-questions.md](open-questions.md#1-리스크))
-
-**단안 카메라에서 크기 정보는 유일한 스케일 소스다.** 각도만으로는 "가까운 작은 물체"와
-"먼 큰 물체"를 구분할 수 없다. z 추정을 포기할 수 없고, 이 정확도가 시스템 성능의 상한을
-결정한다 ([physics.md 8.3장](physics.md#83-x-y-오차는-z보다-훨씬-작다)).
+이와 함께 사라진 것들: `OBJECT_SIZE_M`, `REFERENCE_SIZE_AT_1M`, 클래스별 실물 치수 등록,
+클래스 혼동으로 인한 z 오차, σ_w 합격 기준.
 
 ---
 
@@ -176,7 +191,7 @@ p_robot = p_camera + CAMERA_OFFSET_M        (body frame, 상수 벡터 덧셈)
 **왜 두 상태인가:** 전체 프레임을 640으로 줄여 추론하면 bbox가 2 m에서 11 px까지 작아져
 거리 오차가 2.3배로 늘고 YOLO 검출률도 떨어진다. ROI 크롭은 네이티브 해상도를 유지해
 bbox 26 px를 지킨다
-([vision-pipeline.md 2장](vision-pipeline.md#2--추론-해상도가-z-정확도를-2배-이상-좌우한다)).
+([vision-pipeline.md 2장](vision-pipeline.md#2--추론-해상도가-검출률을-좌우한다)).
 
 SEARCH의 부정확한 첫 관측은 문제되지 않는다. 칼만필터가 어차피 큰 불확실성으로 시작하고,
 2~3프레임 뒤 TRACK으로 넘어가면서 정밀도가 확보된다.
@@ -263,10 +278,17 @@ def run(cam, link, est, clock):
 
 ---
 
-## 5. 궤적 추정기 (ProjectileEstimator)
+## 5. 궤적 추정기 (ProjectileEstimator) — 폐기됨
 
-[`pi/kalman.py`](../pi/kalman.py)의 `ProjectileKalman`을 [`catcher/estimator.py`](../catcher/estimator.py)로 이식하고
-아래 4가지를 개선한다.
+> **현재 구현은 칼만필터를 쓰지 않는다.** 매 프레임 관측 전체를 **처음부터 다시**
+> 선형 최소제곱으로 푼다 ([`../pi5/trajectory.py`](../pi5/trajectory.py)의 `Tracker`).
+> 이 규모에서는 최소제곱이 마이크로초라 그게 더 간단하고, 초기추정·수렴실패가 없다.
+>
+> 아래 노이즈 전파 논의(개선 1)는 **σ_z가 bbox 폭에서 온다는 전제**라 그대로는
+> 성립하지 않는다. 지금은 그 역할을 재투영 잔차 하나가 대신한다.
+> 기록으로 남긴다.
+
+원래 설계는 이랬다 — 아래 4가지를 개선한 6상태 칼만필터.
 
 - **상태:** `[X, Y, Z, VX, VY, VZ]` (world frame, 6차원)
 - **예측 모델:** 포물선 운동 — 가속도 `(0, 0, −g_eff)`, `g_eff`는 클래스별
@@ -385,59 +407,16 @@ guidance)가 된다. 궤적을 미리 계획할 필요가 없다. 정교한 가�
 
 ---
 
-## 8. 파일 구조와 모듈 책임
+## 8~9. 파일 구조와 이행 계획 — 폐기됨
 
-```
-pi5/
-├── main.py            # 연속 추정 루프 (4절)
-├── config.py          # 전 파라미터
-├── vision.py          # 캡처 + YOLO(detect_full/detect_roi) + 픽셀→body 좌표
-├── frames.py          # ★신규  body ↔ world 변환
-├── estimator.py       # ★신규  포물선 칼만필터 (pi/kalman.py 이식)
-├── trajectory.py      # 착지 예측 (recalibrate 삭제)
-├── control.py         # 목표 속도 + 도달가능성 판정
-├── communication.py   # USB 시리얼 + 프로토콜
-├── utils.py           # 로깅 + 타이밍
-└── sim/               # ★신규  시뮬레이터
-    ├── world.py       #   물체 낙하 + 로봇 운동 모델
-    ├── fake_camera.py #   Camera 대체 (bbox 직접 합성)
-    └── fake_link.py   #   SerialLink 대체 (피코 모델)
-```
+원래 여기에는 `catcher/` 신규 폴더 구성과 구코드 이행 계획이 있었다.
+**`catcher/`는 만들지 않기로 했고, 팀의 `pi5/`가 그 역할을 이미 하고 있다.**
 
-| 파일 | 책임 | 의존 |
-|---|---|---|
-| `main.py` | 상태 기계(SEARCH/TRACK), 루프 오케스트레이션, 종료 판정 | 전부 |
-| `config.py` | 모든 파라미터. **다른 파일에 상수 하드코딩 금지** | 없음 |
-| `vision.py` | 프레임 → `Detection` → `body_xyz`. ROI 크롭·좌표 역변환을 내부에서 끝낸다 | config |
-| `frames.py` | 순수 좌표 변환 함수. 상태 없음 | 없음 |
-| `estimator.py` | 관측 누적 → 궤적 상태 + ROI 중심 예측. **유일한 상태 보유자** | config, frames |
-| `trajectory.py` | 상태 → 착지점/착지시각. 순수 함수 | config |
-| `control.py` | 착지점 + 자세 → 속도 명령. 순수 함수 | config |
-| `communication.py` | 시리얼 I/O + 프레임 인코딩 | config |
+현재 파일 구조와 모듈 책임은 [`../architecture.md`](../architecture.md)를 볼 것.
+이행 계획 대신 남은 작업은 [`../pi5/TODO.md`](../pi5/TODO.md)에 있다.
 
-**설계 원칙:** `frames`, `trajectory`, `control`은 상태 없는 순수 함수 모듈이다. 하드웨어
-없이 단위 테스트가 가능하다. 상태를 가지는 것은 `estimator`(궤적), `communication`(포트),
-`vision`(카메라 핸들)뿐이다.
-
-`main.py`는 진짜 구현과 시뮬레이터를 **의존성 주입**으로 갈아끼울 수 있어야 한다.
-
----
-
-## 9. 현재 코드 대비 변경점
-
-| 파일 | 변경 | 이유 |
-|---|---|---|
-| `main.py` | **재작성** — 2단계 → 연속 루프 + SEARCH/TRACK 상태 기계 | 3, 4절 |
-| `vision.py` | 주점 보정, y축 부호, z는 bbox 폭 기준, 속도 계산 제거,
-  **`detect_full`/`detect_roi` 2단계 추론** | 2.3, 2.4절 · [vision-pipeline](vision-pipeline.md) |
-| `trajectory.py` | `recalibrate()` **삭제**, `predict_landing` 유지 | 3절 |
-| `estimator.py` | **신규** — `pi/kalman.py` 이식 + R/q/초기화/ROI예측 개선 | 5절 |
-| `frames.py` | **신규** — body ↔ world 변환 | 2.2절 |
-| `control.py` | 목표좌표 → **목표 속도** 산출로 변경, 도달가능성 판정 추가 | 7절 |
-| `communication.py` | 페이로드 의미 변경, 타임스탬프, drain-to-latest | [protocol.md](protocol.md) |
-| `config.py` | 파라미터 대폭 추가·개편 | 10절 |
-| `sim/` | **신규** | 시뮬레이터 |
-| `pi/kalman.py` | `estimator.py`로 이식 후 **폴더 삭제** | — |
+> 원래 설계 원칙 중 하나는 살아남았다 — **`trajectory`, `control`은 상태 없는 순수
+> 함수이고 하드웨어 없이 단위 테스트가 가능하다.** 현재 `pi5/trajectory.py`도 그렇다.
 
 ---
 
@@ -449,12 +428,12 @@ pi5/
 
 | 값 | 방법 |
 |---|---|
-| `FOCAL_LENGTH_PX` | **어안** 체커보드 캘리브레이션 (이론값 792) |
-| `PROJECTION_MODEL` | 캘리브레이션으로 확인 (기본 `equisolid`) |
-| `PRINCIPAL_POINT` (u₀, v₀) | 체커보드 카메라 캘리브레이션 |
+| `CAMERA_FX` / `CAMERA_FY` | 체커보드 캘리브레이션 ([`calibrate.py`](../pi5/prep/calibrate.py)). **렌즈 미확정** |
+| `CAMERA_MODEL` | 캘리브레이션 실측 화각으로 결정. 90° 초과면 `fisheye` |
+| `CAMERA_CX` / `CAMERA_CY` (주점) | 체커보드 캘리브레이션. 화면 정중앙이 아니다 |
 | `CAMERA_YAW_RAD` | 조립 후 회전 오차 보정 |
 | `CAMERA_OFFSET_M` | 로봇 중심 → 카메라 광학 중심 벡터 (약 0.15 m). 자로 실측 |
-| `OBJECT_SIZE_M` | 줄자 실측 (**지금 바로 가능**) |
+| ~~`OBJECT_SIZE_M`~~ | **폐기** — 중력이 스케일을 주므로 실물 치수가 필요 없다 (2.4절) |
 | `GRAVITY_BY_CLASS` (g_eff) | 낙하 영상 피팅 |
 | `Z_CATCH` | **0** — 카메라가 통 입구 평면에 있다 |
 
@@ -466,10 +445,11 @@ pi5/
 | `A_MAX` | 2.45 m/s² (μ=0.5 견인한계) | **마찰계수 μ 실측** — 캐치 반경을 좌우한다 |
 | `CAMERA_FPS` | 60 (캡처) | 확정 |
 | `PROCESS_EVERY_N` | 1 또는 2 | 추론 지연 실측 후 결정 (4.4절) |
-| `SIGMA_BBOX_PX` (σ_w, σ_u) | 2 px | 정지 물체 촬영 통계 ([vision-pipeline.md 7장](vision-pipeline.md#7-검증-지표)) |
+| `MAX_RESIDUAL_PX` | 4 px | 재투영 잔차 상한. 넘는 트랙은 버린다 ([vision-pipeline.md 7장](vision-pipeline.md#7-검증-지표)) |
+| `MIN_OBSERVATIONS` / `MIN_TIME_SPAN_S` | 4 / 0.40 s | 피팅 정밀도의 주 손잡이 |
 | `ROI_SIZE_PX` | 640 (추론 입력과 일치) | 확정 |
 | `SIGMA_ODOM_M` | 미정 | 오도메트리 드리프트 측정 |
-| `PROCESS_NOISE_BY_CLASS` | 미정 | 시뮬레이터 + 실측 튜닝 |
+
 | `T_MIN` | 0.08 s | 시뮬레이터 |
 | `COMMAND_TTL_S` | 0.1 s | 시뮬레이터 |
 | `LOST_TIMEOUT_S` | 미정 | 시뮬레이터 |

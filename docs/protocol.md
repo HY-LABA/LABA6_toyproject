@@ -3,7 +3,7 @@
 **양쪽이 반드시 일치해야 하는 계약이다.** 그래서 파이5 문서에도 피코 문서에도 넣지 않고
 따로 뒀다. 한쪽만 고치면 조용히 깨진다.
 
-구현: [`catcher/protocol.py`](../catcher/protocol.py) + [`catcher/link.py`](../catcher/link.py)
+구현: [`../pi5/communication.py`](../pi5/communication.py)
 ↔ [`pico/communication.c`](../pico/communication.c)
 
 관련 문서: [파이5 알고리즘](pi5-algorithm.md) · [피코 제어](pico-control.md)
@@ -145,7 +145,7 @@ def latest_odometry(self):
 
 ## 6. 디버깅
 
-[`catcher/protocol.py`](../catcher/protocol.py)에 `debug_decode(raw: bytes) -> str`가 있다.
+`debug_decode(raw: bytes) -> str` 같은 디코더를 두면 배선 문제를 빨리 찾을 수 있다.
 raw 바이트를 사람이 읽는 텍스트로 바꾼다. 페이로드 길이로 방향을 구분한다.
 
 ```
