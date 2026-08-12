@@ -9,7 +9,8 @@
 - [ ] `WHEEL_ANGLES_RAD[3]` / `WHEEL_MOUNT_RADIUS_M` — 조립 후 자·각도기로 실측
       (지금은 이론값 90/210/330도, 0.15m)
 - [ ] `MOTOR_PID[3]` — 모터 실측 튜닝 (지금은 3개 다 동일 placeholder)
-- [ ] **`MAX_BODY_SPEED_MPS`** — 지금 1.8은 이론값(350RPM × π × 0.1m).
+- [ ] **`MAX_BODY_SPEED_MPS`** — 지금 1.22는 이론값
+      (FIT0186 251RPM × 0.925 부하감쇠 × π × 0.1m).
       **`pi5/config.py`의 `ROBOT_MAX_SPEED_MPS`와 같은 값으로 맞출 것**
 
 ## 2. 모터 돌려보며 실측할 것 ★ 도착하면 제일 먼저
