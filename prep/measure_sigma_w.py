@@ -34,7 +34,7 @@ def cmd_capture(args) -> int:
 
     out = ROOT / f"{args.label}_{args.distance:.2f}m_{args.camera}"
     out.mkdir(parents=True, exist_ok=True)
-    cam = camlib.open_camera(args.camera)
+    cam = camlib.open_from_args(args)
     print(f"\n물체를 카메라에서 정확히 {args.distance} m 에 **정지**시켜라 (줄자로 실측).")
     print(f"[조작] SPACE 촬영 시작 / Q 종료   목표 {args.frames}장\n")
 

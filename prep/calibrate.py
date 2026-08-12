@@ -45,7 +45,7 @@ def cmd_capture(args) -> int:
     out.mkdir(parents=True, exist_ok=True)
     pattern = (args.cols, args.rows)
 
-    cam = camlib.open_camera(args.camera)
+    cam = camlib.open_from_args(args)
     print("\n[조작]  SPACE 저장   Q 종료")
     print("[요령]  화면 **가장자리와 모서리**를 반드시 채워라. 어안일수록 중요하다.")
     print("        보드를 기울여 여러 각도로 찍어야 초점거리와 왜곡이 분리된다.\n")
