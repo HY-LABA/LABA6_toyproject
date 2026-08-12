@@ -94,12 +94,23 @@ def _undistort(u: float, v: float) -> tuple[float, float]:
     **이미지 전체를 펴지 않고 점 하나만 보정한다.** 40fps로 프레임을 통째로
     undistort하는 건 파이 입장에서 낭비다 — 프레임당 의미 있는 픽셀이 한 점뿐이다.
 
-    LS40136은 M12 광각 렌즈다. 화각이 넓으면 왜곡이 가장자리에서 커지고, 궤적
-    피팅은 화면 전체를 가로지르는 궤적을 쓰므로 보정 없이는 잔차가 계통적으로
-    커진다. 캘리브레이션이 끝나기 전까지는 보정 없이 돌아가되(원본 좌표 그대로),
-    그 상태의 residual_px는 렌즈 왜곡을 포함한 값임을 기억할 것.
+    번들 M12 2.8mm는 **대각 140° 어안**이다. 화각이 90°를 넘으면 왜곡이 크고 작고의
+    문제가 아니라 **투영식 자체가 다르다** — trajectory.py의 선형 해법은 핀홀
+    (r = f·tanθ)을 전제하는데 이 렌즈는 그 식을 따르지 않는다. 보정 없이 넣으면
+    입사각 42°에서 깊이가 79% 틀어진다 (../docs/physics.md 7.2장).
+
+    그래서 캘리브레이션 전에도 **원본 좌표를 그대로 흘리면 안 된다.**
+    계수가 없는 동안은 fisheye.py의 해석적 등입체각 근사로 편다. 사양에서 역산한
+    근사라 완벽하진 않지만, 보정을 아예 안 하는 것과는 차원이 다르다.
+
+    (렌즈가 좁은 화각으로 바뀌면 config.CAMERA_MODEL을 "pinhole"로 두면 되고,
+     그때는 계수가 없을 때 원본을 그대로 흘리는 게 맞다.)
     """
     if config.CAMERA_DISTORTION is None:
+        if config.CAMERA_MODEL == "fisheye":
+            import fisheye
+            (u2, v2), = fisheye.to_pinhole_px([[u, v]])
+            return float(u2), float(v2)
         return u, v
 
     import cv2
