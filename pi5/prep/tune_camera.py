@@ -1,33 +1,32 @@
-"""카메라 세팅(노출/게인) 실시간 튜닝 + 블러 확인용 도구.
+"""카메라 세팅(노출/게인) 튜닝 도구 — GUI 창 없이 터미널로.
 
-로직(trajectory.py 등) 고칠 때마다 카메라 설정 바꾸겠다고 코드 수정 + 재실행을
-반복하기 귀찮아서 만들었다. 슬라이더로 노출/게인을 실시간으로 바꾸면서 화면으로
-바로 확인하고, 물체를 빠르게 흔들면서 블러가 어느 정도인지도 같이 본다.
+`cv2.imshow`/트랙바는 라즈베리파이에서 OpenCV가 GTK/Qt 없이 빌드돼 있으면 창이
+뜨다 바로 죽는다. 이 버전은 그 문제를 아예 피한다 — 실시간 미리보기 창 대신,
+터미널에서 숫자를 입력해 노출/게인을 바꾸고, 그때마다 사진을 한 장 찍어서 파일로
+저장한다. 확인은 그 파일을 이미지 뷰어로 열어서 하면 된다 (저장 관련 기능만 쓰므로
+헤드리스 SSH에서도 항상 동작한다 — GUI 창을 전혀 띄우지 않는다).
 
     python tune_camera.py --camera gs
 
-[조작]
-  슬라이더 exposure_us / gain_x10 — 움직이면 바로 카메라에 반영된다
-  SPACE — 지금 프레임을 파일로 저장 (물체를 빠르게 움직인 순간에 눌러서 블러 확인)
-  R     — 슬라이더를 --camera 프로파일 초기값으로 되돌림
-  Q     — 종료. 마지막 값을 콘솔에 출력한다 — 맘에 들면 그대로 camera.py SPECS에 넣으면 됨
+[명령] (엔터로 구분해서 입력)
+  e <값>   — exposure_us 설정 (예: e 1500)
+  g <값>   — gain 설정 (예: g 20)
+  c        — 3초 카운트다운 후 촬영·저장 (그 사이에 물체를 빠르게 흔들어서 블러 테스트)
+  s        — 카운트다운 없이 바로 촬영·저장
+  q        — 종료 (마지막 값 출력)
 
-화면 좌상단에 지금 exposure_us/gain/실측 밝기(mean)/선명도 점수(라플라시안 분산)를
-띄운다. 선명도 점수는 절대치가 아니라 **같은 장면·같은 물체 위치에서 값이 왜
-떨어지는지 상대 비교**로 쓸 것 — 화면이 비어있으면 원래도 낮게 나온다.
+매 촬영마다 밝기(mean)·선명도(라플라시안 분산 — 클수록 에지가 선명하다는 신호)를
+같이 찍어준다. 절대치보다 **같은 장면에서 값이 왜 변하는지 상대 비교**로 쓸 것.
 
-⚠ 블러 확인은 반드시 SPACE로 저장된 파일을 그대로 열어서 볼 것. 화면을 폰카메라로
-다시 찍어서 보면 폰카메라 자체의 블러/모아레가 섞여 판단을 그르친다 (실제로 이전에
-그렇게 확인하다가 화질 문제를 과대평가한 적이 있다).
-
-원격 접속(SSH/VNC)이면 슬라이더 반응이 느릴 수 있다 — TROUBLESHOOTING.md 3번과
-같은 원인이니, 가능하면 모니터를 직접 연결해서 쓸 것.
+⚠ 블러/색 확인은 반드시 저장된 파일을 직접 열어서 볼 것. 화면을 폰카메라로 다시
+찍어서 보면 폰카메라 자체의 블러/모아레가 섞여 판단을 그르친다.
 """
 
 from __future__ import annotations
 
 import argparse
 import pathlib
+import time
 
 import camera as camlib
 
@@ -39,15 +38,23 @@ def _sharpness(cv2, gray) -> float:
     return cv2.Laplacian(gray, cv2.CV_64F).var()
 
 
+def _snap(cv2, cam, exp: int, gain: float, n: int) -> int:
+    frame, _ = cam.read()
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    mean = float(frame.mean())
+    sharp = _sharpness(cv2, gray)
+    path = OUT_DIR / f"{n:03d}_exp{exp}_gain{gain:.1f}.jpg"
+    cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    print(f"  저장: {path}  mean={mean:.1f}  sharpness={sharp:.1f}")
+    return n + 1
+
+
 def main() -> int:
     import cv2
 
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     camlib.add_profile_arg(ap)
-    ap.add_argument("--exposure-max-us", type=int, default=10000,
-                    help="슬라이더 상한(µs). 더 밝게 보고 싶으면 늘릴 것")
-    ap.add_argument("--gain-max", type=float, default=32.0, help="슬라이더 상한")
     args = ap.parse_args()
 
     OUT_DIR.mkdir(exist_ok=True)
@@ -56,60 +63,59 @@ def main() -> int:
                               max_exposure_us=args.max_exposure_us, max_gain=args.max_gain)
     if cam.backend != "picamera2":
         print(f"[경고] backend={cam.backend} — 실시간 노출/게인 조절은 Picamera2 전용이다. "
-              f"슬라이더를 움직여도 반영되지 않는다.")
+              f"명령을 넣어도 반영되지 않는다.")
 
-    win = "tune_camera  (SPACE=저장  R=초기화  Q=종료)"
-    cv2.namedWindow(win)
-    init_exp = int(cam.spec.exposure_us or 1000)
-    init_gain10 = int(round((cam.spec.gain or 4.0) * 10))
-    cv2.createTrackbar("exposure_us", win, init_exp, args.exposure_max_us, lambda v: None)
-    cv2.createTrackbar("gain_x10", win, init_gain10, int(args.gain_max * 10), lambda v: None)
-
-    print(f"\n초기값: exposure_us={init_exp}  gain={init_gain10 / 10:.1f}")
-    print("[조작] 슬라이더로 실시간 조절 / SPACE 저장 / R 초기화 / Q 종료\n")
-
-    last_exp, last_gain = None, None
+    exp = int(cam.spec.exposure_us or 1000)
+    gain = float(cam.spec.gain or 4.0)
     n = 0
+
+    print(f"\n초기값: exposure_us={exp}  gain={gain:.1f}")
+    print("[명령]  e <값>  g <값>  c(카운트다운 촬영)  s(바로 촬영)  q(종료)\n")
+
     try:
         while True:
-            frame, _ = cam.read()
-            exp = max(1, cv2.getTrackbarPos("exposure_us", win))
-            gain = max(0.1, cv2.getTrackbarPos("gain_x10", win) / 10.0)
-            if (exp, gain) != (last_exp, last_gain):
-                cam.set_manual(exposure_us=exp, gain=gain)
-                last_exp, last_gain = exp, gain
-
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            mean = float(frame.mean())
-            sharp = _sharpness(cv2, gray)
-
-            view = frame.copy()
-            cv2.putText(view, f"exposure_us={exp}  gain={gain:.1f}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.putText(view, f"mean={mean:.1f}  sharpness={sharp:.1f}  saved={n}", (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.imshow(win, view)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
+            try:
+                raw = input(f"[exp={exp} gain={gain:.1f}] > ").strip()
+            except EOFError:
                 break
-            if key == ord(" "):
-                path = OUT_DIR / f"{n:03d}_exp{exp}_gain{gain:.1f}.jpg"
-                cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                print(f"저장: {path}  (mean={mean:.1f}, sharpness={sharp:.1f})")
-                n += 1
-            if key == ord("r"):
-                cv2.setTrackbarPos("exposure_us", win, init_exp)
-                cv2.setTrackbarPos("gain_x10", win, init_gain10)
+            if not raw:
+                continue
+            head, *rest = raw.split()
+
+            if head == "q":
+                break
+            elif head == "e" and rest:
+                try:
+                    exp = max(1, int(rest[0]))
+                except ValueError:
+                    print("  숫자를 넣을 것 (예: e 1500)")
+                    continue
+                cam.set_manual(exposure_us=exp)
+            elif head == "g" and rest:
+                try:
+                    gain = max(0.1, float(rest[0]))
+                except ValueError:
+                    print("  숫자를 넣을 것 (예: g 20)")
+                    continue
+                cam.set_manual(gain=gain)
+            elif head == "c":
+                for sec in (3, 2, 1):
+                    print(f"  {sec}...")
+                    time.sleep(1)
+                print("  촬영!")
+                n = _snap(cv2, cam, exp, gain, n)
+            elif head == "s":
+                n = _snap(cv2, cam, exp, gain, n)
+            else:
+                print("  e <값> / g <값> / c / s / q 중 하나를 입력할 것")
     finally:
         cam.close()
-        cv2.destroyAllWindows()
 
-    print(f"\n최종값: exposure_us={last_exp}  gain={last_gain:.1f}")
-    print("맘에 들면 pi5/prep/camera.py의 SPECS[...] 에 그대로 반영할 것:")
-    print(f"  exposure_us={last_exp}, gain={last_gain:.1f},")
+    print(f"\n최종값: exposure_us={exp}  gain={gain:.1f}")
+    print("맘에 들면 pi5/prep/camera.py의 SPECS[...] 에 반영할 것:")
+    print(f"  exposure_us={exp}, gain={gain:.1f},")
     print(f"\n{n}장 저장 -> {OUT_DIR.resolve()}/")
-    print("블러 확인은 이 파일들을 직접 열어서 볼 것 (폰카메라로 화면 재촬영 금지).")
+    print("이미지 뷰어로 직접 열어서 밝기·색·블러를 확인할 것.")
     return 0
 
 
