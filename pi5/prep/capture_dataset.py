@@ -118,12 +118,17 @@ def main() -> int:
     ap.add_argument("--no-display", dest="display", action="store_false",
                     help="창을 띄우지 않는다. SSH/VNC 로 접속했다면 반드시 붙일 것 — "
                          "X11 로 프레임을 보내는 비용이 30fps를 3fps로 떨어뜨린다")
-    ap.add_argument("--warmup", type=int, default=60, help="배경 학습 프레임 수")
+    ap.add_argument("--warmup", type=int, default=150, help="배경 학습 프레임 수")
     ap.add_argument("--arm-frames", type=int, default=2,
                     help="연속 이 프레임 이상 유효해야 '확정'하고 추적을 시작한다 (손 구간 "
                          "오검출 회피). 확정 전까지 모아둔 프레임도 확정되는 순간 같이 "
                          "저장된다 — 버려지지 않는다.")
-    ap.add_argument("--track-grace", type=int, default=3,
+    ap.add_argument("--arm-grace", type=int, default=2,
+                    help="확정 대기 중 연속으로 이 프레임까지는 놓쳐도 그동안 모은 pending "
+                         "프레임을 안 버리고 계속 기다린다 (어두워서 검출이 한두 프레임 "
+                         "튀는 정도로는 처음부터 다시 시작하지 않게). 넘으면 그때 버리고 "
+                         "streak을 0부터 다시 센다.")
+    ap.add_argument("--track-grace", type=int, default=6,
                     help="추적 중 연속으로 이 프레임까지는 놓쳐도(모션블러로 필터가 잠깐 "
                          "튐 등) 물체가 사라진 걸로 안 보고 계속 따라가며 저장한다. 넘으면 "
                          "그때 추적을 끝내고 다음 확정을 기다린다.")
@@ -166,6 +171,7 @@ def main() -> int:
     streak = 0
     tracking = False
     miss = 0
+    arm_miss = 0
     pending: list[tuple[np.ndarray, tuple[int, int, int, int]]] = []
     paused = False
     reasons: dict[str, int] = {}
@@ -213,6 +219,7 @@ def main() -> int:
                 # 순간의 우연한 블롭 하나로 오검출되는 걸 막는다).
                 if box:
                     streak += 1
+                    arm_miss = 0
                     pending.append((frame.copy(), box))
                     good = True
                     if streak >= args.arm_frames:
@@ -223,9 +230,16 @@ def main() -> int:
                         pending.clear()
                         tracking = True
                         miss = 0
-                else:
-                    streak = 0
-                    pending.clear()
+                elif pending:
+                    # 이미 모아둔 pending이 있는 상태에서 놓쳤다 — 어두워서 검출이
+                    # 한두 프레임 튀는 정도로 그동안 모은 걸 통째로 버리지 않는다.
+                    # arm_grace를 넘겨야 진짜로 놓친 것으로 보고 버린다.
+                    arm_miss += 1
+                    if arm_miss > args.arm_grace:
+                        streak = 0
+                        pending.clear()
+                        arm_miss = 0
+                # pending이 비어있는데 box도 없으면 애초에 쌓인 게 없으므로 할 일이 없다.
             else:
                 # 확정된 물체를 추적 중 — 사라질 때까지 매 프레임 저장한다.
                 if box:

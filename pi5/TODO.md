@@ -11,7 +11,10 @@
       확인 방법 두 가지 (둘 다 2분):
       1. **렌즈 몸통 각인 보기** — `F1.6 6mm` 처럼 거의 항상 적혀 있다
       2. **벽 재기** — 벽에서 1m 띄우고 화면 좌우 끝에 걸리는 폭 S를 잰다.
-         `f_px = 1456 × 거리 ÷ S`
+         `f_px = 1456 × 거리 ÷ S`.
+         **`prep/measure_focal_length.py`** — 라이브 프리뷰로 좌우 경계 맞추고
+         스냅샷 저장까지 해주는 스크립트. 줄자로 읽은 S만 `--width-m`로 넣으면
+         f_px와 config.py에 넣을 CAMERA_FX 값을 바로 계산해준다.
 
       | 렌즈 | 1m에서 보이는 폭 | CAMERA_FX |
       |---|---|---|
@@ -53,7 +56,11 @@
       여기서는 **`SensorTimestamp`로 바꿔야 한다** — 파이썬이 버퍼를 받은 시각에는
       스케줄링 지터가 섞여 있고 궤적 피팅이 그걸 물체의 운동으로 읽는다
 - [ ] `vision._HailoYolo` — HailoRT 실제 추론 (⚠ API는 실제 버전 문서로 검증 필요)
-- [ ] `communication.SerialLink.__init__` — pyserial로 포트 여는 코드
+- [x] `communication.SerialLink.__init__` — pyserial로 포트 여는 코드 완료.
+      `port` 인자로 `config.SERIAL_PORT`를 오버라이드 가능 (`teleop_test.py`가 사용).
+      **테스트: `teleop_test.py`** — Xbox 컨트롤러 왼쪽 스틱으로 body-frame vx/vy를
+      직접 쏴서 피코 모터 응답을 확인. `pico/TODO.md` 2번(최대속도·가속시간·정지거리)
+      실측용. 카메라/YOLO 없이 피코 브링업만 먼저 검증할 수 있다.
 
 ## 3. 만들어야 하는 것
 

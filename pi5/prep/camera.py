@@ -72,8 +72,13 @@ SPECS: dict[str, CameraSpec] = {
         name="InnoMaker CAM-IMX296Color-GS + 6mm CS 렌즈",
         width=1456, height=1088, fps=60,
         calib_model="pinhole", exposure_us=1000, gain=4.0,
-        max_exposure_us=1000, max_gain=16.0,   # auto_lock이 그 이상으로 늘리지 못하게
+        max_exposure_us=1000, max_gain=32.0,   # auto_lock이 그 이상으로 늘리지 못하게
                                                 # 상한을 exposure_us와 같이 잡아뒀다.
+                                                # ⚠ 16.0에서 32.0으로 올림(2026-08-12) — 실내
+                                                # 조명에서 너무 어둡게 찍히는 문제 때문. 노출은
+                                                # 그대로 1ms로 묶어 블러 억제는 유지하고, 게인만
+                                                # 더 허용해 빛을 보충한다. 노이즈는 늘어나므로
+                                                # 찍힌 사진이 너무 지글거리면 낮출 것.
         note="라즈베리파이 공식 GS 카메라와 동일 스펙(제조사가 호환품으로 표기). "
              "Sony IMX296 Color, 1456x1088, 픽셀 3.45µm, 센서 대각 6.3mm(1/2.9\"), "
              "글로벌 셔터, 최대 60fps, C/CS 마운트, 최소 노출 30µs. "
@@ -233,8 +238,11 @@ class Camera:
         """(BGR 프레임, 캡처 시각[s])."""
         t = time.monotonic()
         if self._kind == "picamera2":
-            frame = self._impl.capture_array()          # RGB888
-            return frame[:, :, ::-1].copy(), t          # -> BGR (OpenCV 관례)
+            # ⚠ Picamera2의 유명한 함정: format="RGB888"로 설정해도 capture_array()는
+            # 이미 BGR 순서로 채워서 준다 (libcamera 픽셀 포맷 이름과 실제 메모리
+            # 순서가 반대). 예전엔 여기서 [:, :, ::-1]로 한 번 더 뒤집었는데, 이미
+            # BGR인 걸 또 뒤집으면 R/B가 스왑돼 빨간 물체가 파랗게 찍힌다.
+            return self._impl.capture_array().copy(), t
         ok, frame = self._impl.read()
         if not ok:
             raise RuntimeError("프레임 읽기 실패")

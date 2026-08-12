@@ -64,16 +64,18 @@ def _decode_payload(frame: bytes) -> bytes:
 
 
 class SerialLink:
-    def __init__(self) -> None:
-        self._port = None
-        # 정해야함: pyserial 연결
-        #   import serial
-        #   self._port = serial.Serial(config.SERIAL_PORT, config.SERIAL_BAUDRATE,
-        #                              timeout=config.SERIAL_TIMEOUT_S)
+    def __init__(self, port: str | None = None) -> None:
+        """port를 넘기면 config.SERIAL_PORT보다 우선한다 (teleop_test.py처럼 장치
+        경로를 CLI에서 받는 경우용 — config.SERIAL_PORT는 아직 확정 전이라 None)."""
+        import serial
+
+        resolved = port or config.SERIAL_PORT
+        if resolved is None:
+            raise ValueError("SERIAL_PORT 미설정 — config.py에 채우거나 port 인자로 넘길 것")
+        self._port = serial.Serial(resolved, config.SERIAL_BAUDRATE,
+                                    timeout=config.SERIAL_TIMEOUT_S)
 
     def send_command(self, cmd: DriveCommand) -> None:
-        if self._port is None:
-            raise NotImplementedError("정해야함: config.SERIAL_PORT + pyserial 연결")
         payload = struct.pack(_SEND_FORMAT, cmd.target_vx, cmd.target_vy, cmd.timeout_s)
         self._port.write(_encode(payload))
 
@@ -85,9 +87,6 @@ class SerialLink:
         손실이다. 피코는 1ms마다 보내므로 버퍼에 쌓인 것 중 **가장 최근 것**만
         쓰고 나머지는 흘린다 — 오래된 오도메트리는 아무 가치가 없다.
         """
-        if self._port is None:
-            raise NotImplementedError("정해야함: config.SERIAL_PORT + pyserial 연결")
-
         latest: Odometry | None = None
         frame_size = 3 + struct.calcsize(_RECV_FORMAT)
         while self._port.in_waiting >= frame_size:
