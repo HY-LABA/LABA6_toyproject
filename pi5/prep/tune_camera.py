@@ -60,6 +60,7 @@ def main() -> int:
 
     win = "tune_camera  (SPACE=저장  R=초기화  Q=종료)"
     cv2.namedWindow(win)
+    cv2.waitKey(1)
     init_exp = int(cam.spec.exposure_us or 1000)
     init_gain10 = int(round((cam.spec.gain or 4.0) * 10))
     cv2.createTrackbar("exposure_us", win, init_exp, args.exposure_max_us, lambda v: None)
