@@ -3,6 +3,10 @@
     python capture_dataset.py --label can --camera csi
     python capture_dataset.py --label pet_bottle --session-note "복도 형광등"
 
+    # SSH/VNC 로 접속했다면 반드시 이렇게. 창을 원격으로 보내는 비용이
+    # 프레임률을 10분의 1로 떨어뜨린다 (TROUBLESHOOTING.md 3번)
+    python capture_dataset.py --label pet_bottle --no-display
+
 동작: 카메라를 고정하고 천장을 향하게 둔 뒤, 물체를 떨어뜨린다. 배경(천장)은 정지해 있고
 움직이는 건 물체뿐이므로 MOG2가 물체만 골라낸다. 클래스는 --label로 미리 알려주므로
 사람이 라벨을 찍을 필요가 없다.
@@ -22,15 +26,6 @@
 │ ⑤ 배경과 색이 비슷하면 실패    — 흰 종이컵 + 흰 천장 조합은 피할 것         │
 └──────────────────────────────────────────────────────────────────────────┘
 
-┌─ 화면이 어두울 때 ────────────────────────────────────────────────────────┐
-│ 카메라가 천장(=조명)을 보고 있어서 자동노출이 물체를 어둡게 만든다.        │
-│ 시작할 때 진단이 뜨고, 실행 중에도 아래 키로 바로 고칠 수 있다:            │
-│   ] / [  EV 올림/내림 (자동노출일 때 가장 먼저 쓸 것)                      │
-│   + / -  수동 노출 늘림/줄임    A  자동노출 토글                          │
-│   B      화면만 밝게 (저장 이미지는 그대로 — 확인용)                       │
-│ 자세한 원인 구분은 camera.py 의 diagnose() 주석 참고.                      │
-└──────────────────────────────────────────────────────────────────────────┘
-
 **자동 라벨은 초안이다.** bbox 폭이 곧 거리 정확도이므로 review_labels.py로 반드시 검수한다
 (../docs/vision-pipeline.md 4장).
 
@@ -48,13 +43,27 @@ import argparse
 import datetime as dt
 import json
 import pathlib
+import statistics
+import sys
+import time
 
 import numpy as np
 
 import camera as camlib
 
-CLASSES = ["can", "pet_bottle", "paper_cup"]   # catcher/config.py TARGET_CLASSES와 순서 일치
+# 클래스가 하나다 (2026-08-10). 궤적 추정이 중력 기반으로 바뀌면서 물체의 실제
+# 크기를 알 필요가 없어졌고, 그러면 종류를 구분할 이유도 함께 사라졌다 — 예전에는
+# 클래스별 기준 크기(REFERENCE_SIZE_AT_1M)를 조회하려고 클래스가 필요했다.
+# 부수 효과로 pi5/config.py와의 클래스 순서 불일치 버그도 없어졌다.
+CLASSES = ["trash"]
 ROOT = pathlib.Path("dataset_raw")
+
+
+def beep() -> None:
+    """저장될 때마다 소리로 알린다. --no-display 로 돌리면 이게 유일한 즉시 피드백이다
+    (그리고 어차피 던지는 사람은 화면 앞이 아니라 방 건너편에 있다)."""
+    sys.stdout.write("\a")
+    sys.stdout.flush()
 
 
 class BlobFinder:
@@ -106,9 +115,18 @@ def main() -> int:
     camlib.add_profile_arg(ap)
     ap.add_argument("--label", required=True, choices=CLASSES, help="이번 세션에서 떨어뜨릴 물체")
     ap.add_argument("--session-note", default="", help="배경/조명 메모 (다양성 추적용)")
+    ap.add_argument("--no-display", dest="display", action="store_false",
+                    help="창을 띄우지 않는다. SSH/VNC 로 접속했다면 반드시 붙일 것 — "
+                         "X11 로 프레임을 보내는 비용이 30fps를 3fps로 떨어뜨린다")
     ap.add_argument("--warmup", type=int, default=60, help="배경 학습 프레임 수")
     ap.add_argument("--arm-frames", type=int, default=2,
-                    help="연속 이 프레임 이상 유효해야 저장 시작 (손 구간 회피)")
+                    help="연속 이 프레임 이상 유효해야 '확정'하고 추적을 시작한다 (손 구간 "
+                         "오검출 회피). 확정 전까지 모아둔 프레임도 확정되는 순간 같이 "
+                         "저장된다 — 버려지지 않는다.")
+    ap.add_argument("--track-grace", type=int, default=3,
+                    help="추적 중 연속으로 이 프레임까지는 놓쳐도(모션블러로 필터가 잠깐 "
+                         "튐 등) 물체가 사라진 걸로 안 보고 계속 따라가며 저장한다. 넘으면 "
+                         "그때 추적을 끝내고 다음 확정을 기다린다.")
     ap.add_argument("--min-area", type=int, default=80)
     ap.add_argument("--max-area-frac", type=float, default=0.25,
                     help="프레임 대비 최대 면적. 넘으면 손/사람으로 본다")
@@ -119,8 +137,6 @@ def main() -> int:
     ap.add_argument("--history", type=int, default=300)
     ap.add_argument("--var-threshold", type=float, default=25.0)
     ap.add_argument("--max-frames", type=int, default=0, help="0이면 무제한")
-    ap.add_argument("--preview-boost", action="store_true",
-                    help="화면만 밝게 본다 (저장 이미지는 그대로). 실행 중 B 키로도 전환")
     args = ap.parse_args()
 
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -130,33 +146,44 @@ def main() -> int:
     out_img.mkdir(parents=True, exist_ok=True)
     out_lbl.mkdir(parents=True, exist_ok=True)
 
-    cam = camlib.open_from_args(args)
+    cam = camlib.open_camera(args.camera, exposure_us=args.exposure_us, gain=args.gain,
+                              auto_lock=args.auto_lock_exposure,
+                              max_exposure_us=args.max_exposure_us, max_gain=args.max_gain)
     frame, _ = cam.read()
     H, W = frame.shape[:2]
     finder = BlobFinder(cv2, args, W * H)
     cls_id = CLASSES.index(args.label)
 
-    # 어두우면 여기서 원인을 짚어준다. 어두운 채로 수집하면 MOG2도 YOLO도 같이 나빠진다.
-    ok, msg = camlib.diagnose(cam, frame)
-    print(f"\n[노출] {msg}")
-    if not ok:
-        print("[노출] 고친 뒤 수집을 시작하는 게 좋다 — 어두운 데이터는 다시 못 살린다.")
-
     print(f"\n세션 {session}   클래스 {args.label}(id={cls_id})")
-    print("[조작]  SPACE 일시정지/재개   R 배경 재학습   Q 종료")
-    print("[노출]  ] / [ EV   + / - 수동노출   A 자동노출 토글   B 화면만 밝게")
+    if args.display:
+        print("[조작]  SPACE 일시정지/재개   R 배경 재학습   Q 종료")
+    else:
+        print("[조작]  Ctrl+C 종료   (창 없음 — 저장될 때마다 비프음이 난다)")
     print(f"[순서]  ① 카메라 고정 ② 워밍업 {args.warmup}프레임 동안 화면 비우기 "
           f"③ 물체 투척 반복\n")
 
     saved = 0
     streak = 0
+    tracking = False
+    miss = 0
+    pending: list[tuple[np.ndarray, tuple[int, int, int, int]]] = []
     paused = False
-    boost = args.preview_boost
-    st = cam.stats()
-    cam_final = st
-    n = 0
-    dark_frames = 0
     reasons: dict[str, int] = {}
+    fps_log: list[float] = []
+
+    def _save(save_frame: np.ndarray, save_box: tuple[int, int, int, int]) -> None:
+        nonlocal saved
+        x, y, w, h = save_box
+        name = f"{session}_{saved:05d}"
+        cv2.imwrite(str(out_img / f"{name}.jpg"), save_frame,
+                    [cv2.IMWRITE_JPEG_QUALITY, 95])
+        # YOLO 포맷: class cx cy w h  (0~1 정규화)
+        (out_lbl / f"{name}.txt").write_text(
+            f"{cls_id} {(x + w / 2) / W:.6f} {(y + h / 2) / H:.6f} "
+            f"{w / W:.6f} {h / H:.6f}\n", encoding="utf-8")
+        saved += 1
+        beep()
+
     try:
         for i in range(args.warmup):
             f, _ = cam.read()
@@ -165,114 +192,129 @@ def main() -> int:
                 print(f"  워밍업 {i}/{args.warmup}")
         print("  워밍업 완료 — 이제 던져도 된다\n")
 
+        n = 0
+        fps_t0 = time.monotonic()
         while args.max_frames == 0 or n < args.max_frames:
             frame, _ = cam.read()
             n += 1
             if paused:
-                cv2.imshow("capture (paused)",
-                           camlib.preview_boost(frame) if boost else frame)
+                cv2.imshow("capture (paused)", frame)
                 if (cv2.waitKey(30) & 0xFF) == ord(" "):
                     paused = False
                 continue
 
             # 학습률 0: 물체가 배경으로 흡수되지 않게 고정한다.
-            # ⚠ MOG2에는 **원본**을 준다. preview_boost한 프레임을 주면 어두운 영역의
-            #   노이즈까지 같이 증폭돼 헛 덩어리가 늘어난다. 밝기 보정은 눈으로 볼 때만.
             mask, box, why = finder(frame, learning_rate=0.0)
             reasons[why] = reasons.get(why, 0) + 1
-            streak = streak + 1 if box else 0
 
-            view = camlib.preview_boost(frame) if boost else frame.copy()
-            if box:
-                x, y, w, h = box
-                good = streak >= args.arm_frames
-                color = (0, 255, 0) if good else (0, 200, 255)
-                cv2.rectangle(view, (x, y), (x + w, y + h), color, 2)
-                if good:
-                    name = f"{session}_{saved:05d}"
-                    cv2.imwrite(str(out_img / f"{name}.jpg"), frame,
-                                [cv2.IMWRITE_JPEG_QUALITY, 95])
-                    # YOLO 포맷: class cx cy w h  (0~1 정규화)
-                    (out_lbl / f"{name}.txt").write_text(
-                        f"{cls_id} {(x + w / 2) / W:.6f} {(y + h / 2) / H:.6f} "
-                        f"{w / W:.6f} {h / H:.6f}\n", encoding="utf-8")
-                    saved += 1
+            good = False   # 이번 프레임이 저장(또는 확정 대기 보관)에 반영됐는지 — 표시용
+            if not tracking:
+                # 아직 확정 전 — 연속 유효 프레임을 모으기만 한다 (손이 막 놓은
+                # 순간의 우연한 블롭 하나로 오검출되는 걸 막는다).
+                if box:
+                    streak += 1
+                    pending.append((frame.copy(), box))
+                    good = True
+                    if streak >= args.arm_frames:
+                        # 확정 — 그동안 모아둔 프레임까지 전부 저장하고 추적 시작.
+                        # 예전엔 이 프레임들이 그냥 버려졌다.
+                        for pframe, pbox in pending:
+                            _save(pframe, pbox)
+                        pending.clear()
+                        tracking = True
+                        miss = 0
+                else:
+                    streak = 0
+                    pending.clear()
             else:
-                cv2.putText(view, why, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                # 확정된 물체를 추적 중 — 사라질 때까지 매 프레임 저장한다.
+                if box:
+                    miss = 0
+                    _save(frame, box)
+                    good = True
+                else:
+                    miss += 1
+                    if miss > args.track_grace:
+                        # 유예 프레임을 넘게 놓쳤다 — 물체가 진짜로 사라진 것으로 본다.
+                        tracking = False
+                        streak = 0
+                        miss = 0
 
-            cv2.putText(view, f"{args.label}  saved={saved}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            # 그리기와 창 전송은 --display 일 때만 한다. 원격 접속에서는 이 블록
+            # 하나가 나머지 전부를 합친 것보다 비싸다 — 프레임당 6MB 넘게 나간다.
+            if args.display:
+                view = frame.copy()
+                if box:
+                    x, y, w, h = box
+                    color = (0, 255, 0) if good else (0, 200, 255)
+                    cv2.rectangle(view, (x, y), (x + w, y + h), color, 2)
+                else:
+                    cv2.putText(view, why, (10, 60), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7, (0, 0, 255), 2)
+                cv2.putText(view, f"{args.label}  saved={saved}", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                cv2.imshow("capture", view)
+                cv2.imshow("mask", cv2.resize(mask, (W // 2, H // 2)))
 
-            # 노출 상태를 항상 띄운다 — 어두울 때 무엇을 돌려야 하는지 보이게.
-            if n % 15 == 1:
-                st = cam.stats()
-            exp_ms = (st.get("exposure_us") or 0) / 1000.0
-            mean = float(frame.mean())
-            if mean < 60:
-                dark_frames += 1
-            cv2.putText(view,
-                        f"exp {exp_ms:.1f}ms  gain {st.get('gain') or 0:.1f}x  "
-                        f"EV{cam.ev:+.1f}  mean {mean:.0f}" + ("  [boost]" if boost else ""),
-                        (10, H - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                        (0, 255, 255) if mean < 60 else (200, 200, 200), 2)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
+                    break
+                if key == ord(" "):
+                    paused = True
+                if key == ord("r"):
+                    finder = BlobFinder(cv2, args, W * H)
+                    print("  배경 재학습 — 화면을 비워라")
+                    for _ in range(args.warmup):
+                        f, _ = cam.read()
+                        finder(f, learning_rate=-1)
+                    print("  완료")
 
-            cv2.imshow("capture", view)
-            cv2.imshow("mask", cv2.resize(mask, (W // 2, H // 2)))
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                break
-            if key == ord(" "):
-                paused = True
-            if key in (ord("]"), ord("[")):
-                cam.set_ev(cam.ev + (0.5 if key == ord("]") else -0.5))
-                print(f"  EV {cam.ev:+.1f}")
-            if key in (ord("+"), ord("="), ord("-"), ord("_")):
-                base = st.get("exposure_us") or 5000
-                factor = 1.5 if key in (ord("+"), ord("=")) else 1 / 1.5
-                new = int(min(cam.max_exposure_us, max(100, base * factor)))
-                cam.set_exposure(new)
-                print(f"  수동 노출 {new/1000:.1f}ms (상한 {cam.max_exposure_us/1000:.1f}ms)")
-            if key == ord("a"):
-                cam.set_exposure(None if cam.exposure_us is not None
-                                 else st.get("exposure_us"))
-                print(f"  {'자동' if cam.exposure_us is None else '수동'} 노출")
-            if key == ord("b"):
-                boost = not boost
-                print(f"  화면 밝기 보정 {'켬 — 저장 이미지는 그대로다' if boost else '끔'}")
-            if key == ord("r"):
-                finder = BlobFinder(cv2, args, W * H)
-                print("  배경 재학습 — 화면을 비워라")
-                for _ in range(args.warmup):
-                    f, _ = cam.read()
-                    finder(f, learning_rate=-1)
-                print("  완료")
+            # 실효 프레임률. 창이 없으면 비프음 말고는 이게 유일한 피드백이고,
+            # 창이 있어도 전송이 프레임을 잡아먹는지는 이 숫자로만 알 수 있다.
+            # 놓친 프레임은 그대로 투척당 수집 장수의 손실이다.
+            if n % 30 == 0:
+                now = time.monotonic()
+                fps = 30.0 / max(1e-6, now - fps_t0)
+                fps_t0 = now
+                fps_log.append(fps)
+                print(f"  {fps:5.1f} fps   saved={saved}   최근={why}")
+    except KeyboardInterrupt:
+        # Ctrl+C 로 끊어도 통계와 sessions.json 은 남겨야 한다. 사진 자체는
+        # 프레임마다 즉시 쓰이므로 이미 디스크에 있다.
+        print("\n  Ctrl+C — 중단한다. 저장된 사진은 그대로 남아 있다.")
     finally:
-        cam_final = cam.stats()          # 닫기 전에 확정된 노출값을 기록해둔다
         cam.close()
-        cv2.destroyAllWindows()
+        if args.display:
+            cv2.destroyAllWindows()
 
     manifest = ROOT / "sessions.json"
     data = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else {}
     data[session] = {"label": args.label, "class_id": cls_id, "camera": args.camera,
                      "frames": saved, "note": args.session_note, "created": stamp,
-                     "image_size": [W, H],
-                     # 노출을 남겨둔다 — 나중에 "이 세션은 왜 어두웠나"를 추적할 수 있다
-                     "exposure": {k: v for k, v in cam_final.items() if v is not None},
-                     "dark_frac": round(dark_frames / max(1, n), 3)}
+                     "image_size": [W, H]}
     manifest.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print(f"\n{saved}장 저장 -> {out_img}")
+    # 절대경로로 찍는다. ROOT 가 상대경로라 실행 디렉토리에 따라 위치가 바뀌고,
+    # 그 때문에 "폴더는 생겼는데 사진을 못 찾겠다"가 실제로 한 번 발생했다.
+    print(f"\n{saved}장 저장 -> {out_img.resolve()}")
     print(f"기각 사유: {dict(sorted(reasons.items(), key=lambda kv: -kv[1]))}")
-    if reasons.get("multi", 0) > saved:
+
+    if fps_log:
+        avg = statistics.mean(fps_log)
+        print(f"실효 프레임률: 평균 {avg:.1f} fps  (카메라 설정 {cam.spec.fps} fps)")
+        if avg < cam.spec.fps * 0.7:
+            print("⚠ 프레임을 놓치고 있다 — 투척당 잡히는 장수가 그만큼 줄어든다.")
+            if args.display:
+                print("   원격 접속(SSH/VNC) 중이라면 --no-display 를 붙여라.")
+            else:
+                print("   창이 없는데도 느리다면 MOG2/모폴로지가 풀해상도라 무겁다는 뜻이다.")
+                print("   camera.py 에서 더 낮은 해상도 프로파일을 쓰는 것을 검토할 것.")
+
+    multi_count = sum(v for k, v in reasons.items() if k.startswith("multi"))
+    if multi_count > saved:
         print("⚠ 'multi'가 많다 — 손이 오래 잡히고 있다. 더 빨리 손을 빼거나 위에서 놓아라.")
     if reasons.get("edge", 0) > saved:
         print("⚠ 'edge'가 많다 — 물체가 화면 가장자리로 지나간다. 카메라 정렬을 확인하라.")
-    if saved and dark_frames > saved * 0.5:
-        print(f"⚠ 프레임의 {dark_frames*100//max(1,n)}%가 어두웠다(평균<60). "
-              f"학습 품질이 떨어진다 — 노출을 고치고 이 세션은 다시 찍는 걸 권한다.")
-        print("   최종 설정: " + json.dumps(
-            {k: v for k, v in cam_final.items() if v is not None}, ensure_ascii=False))
     print("\n다음: python review_labels.py --session", session)
     return 0
 

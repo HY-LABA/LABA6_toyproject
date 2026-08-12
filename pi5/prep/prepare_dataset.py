@@ -21,7 +21,17 @@ import random
 import shutil
 
 RAW = pathlib.Path("dataset_raw")
-CLASSES = ["can", "pet_bottle", "paper_cup"]
+# 단일 클래스 (2026-08-10). capture_dataset.py의 CLASSES와 반드시 같아야 한다.
+CLASSES = ["trash"]
+
+
+def class_of(session_name: str) -> str:
+    # 세션명 = f"{label}_{camera}_{stamp}". label에 "_"가 들어갈 수 있으므로
+    # 앞 토큰 하나만 자르지 않고 CLASSES와 매칭한다.
+    for c in CLASSES:
+        if session_name.startswith(c + "_"):
+            return c
+    return session_name.split("_")[0]
 
 
 def main() -> int:
@@ -57,7 +67,7 @@ def main() -> int:
     # 클래스별로 세션을 나눠 각 split에 고르게 들어가게 한다
     by_class: dict[str, list[str]] = collections.defaultdict(list)
     for name in sessions:
-        by_class[name.split("_")[0]].append(name)
+        by_class[class_of(name)].append(name)
 
     rng = random.Random(args.seed)
     split_of: dict[str, str] = {}
@@ -78,7 +88,7 @@ def main() -> int:
     counts: dict[tuple[str, str], int] = collections.Counter()
     for name, files in sessions.items():
         sp = split_of[name]
-        cls = name.split("_")[0]
+        cls = class_of(name)
         for img in files:
             lbl = RAW / "labels" / name / f"{img.stem}.txt"
             if not lbl.exists():

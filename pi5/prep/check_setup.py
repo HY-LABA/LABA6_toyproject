@@ -27,9 +27,6 @@ PACKAGES = [
 ]
 
 
-WARNINGS: list[str] = []      # 실행은 되지만 결과 품질을 망치는 것들
-
-
 def _check(label: str, ok: bool, detail: str = "") -> bool:
     print(f"  [{'OK ' if ok else 'X  '}] {label}" + (f"  — {detail}" if detail else ""))
     return ok
@@ -57,33 +54,36 @@ def check_packages() -> list[str]:
     return missing
 
 
-def check_camera(args) -> bool:
-    spec = camlib.SPECS[args.camera]
+def check_camera(profile: str, exposure_us: int | None, gain: float | None,
+                  auto_lock: bool | None = None,
+                  max_exposure_us: int | None = None, max_gain: float | None = None) -> bool:
+    spec = camlib.SPECS[profile]
     print(f"  프로파일: {spec.name} — {spec.width}x{spec.height} @{spec.fps}fps, "
           f"캘리브레이션 모델 = {spec.calib_model}")
     try:
-        cam = camlib.open_from_args(args)
+        cam = camlib.open_camera(profile, exposure_us=exposure_us, gain=gain,
+                                  auto_lock=auto_lock,
+                                  max_exposure_us=max_exposure_us, max_gain=max_gain)
     except Exception as exc:  # noqa: BLE001
         return _check("카메라 열기", False, str(exc))
     try:
         frame, _ = cam.read()
         h, w = frame.shape[:2]
+        ok = True
         _check(f"프레임 캡처 {w}x{h}", True, f"backend={cam.backend}")
         if (w, h) != (spec.width, spec.height):
             print(f"       ⚠ 요청 해상도({spec.width}x{spec.height})와 다르다. "
                   f"드라이버가 가장 가까운 모드를 골랐을 수 있다.")
         mean = float(frame.mean())
-        if mean > 245:
-            WARNINGS.append("화면이 포화됐다 — 노출을 줄여라 (--ev -1.5)")
-            print("       ⚠ 화면이 포화됐다. 노출을 줄여라.")
-            return True
-        # 어둠은 원인이 둘(AE가 속았다 / 빛이 없다)이고 해법이 정반대라 진단으로 가른다.
-        # 카메라를 여는 것 자체는 성공했으므로 실패가 아니라 **경고**로 다룬다.
-        bright_ok, msg = camlib.diagnose(cam, frame)
-        print(f"  [{'OK ' if bright_ok else '!  '}] 노출/밝기 — {msg}")
-        if not bright_ok:
-            WARNINGS.append("화면이 어둡다 — 위 노출 진단을 먼저 해결할 것")
-        return True
+        print(f"       밝기(mean) = {mean:.1f}  (건강한 범위 대략 40~200)")
+        if mean < 10:
+            print("       ⚠ 화면이 거의 검다. 렌즈 캡을 벗겼는지 먼저 확인. 그다음 "
+                  "--gain을 올려라 (--exposure-us를 늘리면 낙하 물체 블러가 커진다).")
+        elif mean < 40:
+            print("       ⚠ 다소 어둡다. --gain부터 올리고, 부족하면 --exposure-us를 올려라.")
+        elif mean > 245:
+            print("       ⚠ 화면이 포화됐다. --gain 또는 --exposure-us를 낮춰라.")
+        return ok
     except Exception as exc:  # noqa: BLE001
         return _check("프레임 캡처", False, str(exc))
     finally:
@@ -115,7 +115,8 @@ def main() -> int:
     cam_ok = True
     if not args.skip_camera:
         print("\n=== 카메라 ===")
-        cam_ok = check_camera(args)
+        cam_ok = check_camera(args.camera, args.exposure_us, args.gain, args.auto_lock_exposure,
+                               args.max_exposure_us, args.max_gain)
 
     print("\n=== 요약 ===")
     if missing:
@@ -125,15 +126,8 @@ def main() -> int:
         print("    - /boot/firmware/config.txt 의 dtoverlay 확인")
         print("    - `rpicam-hello --list-cameras` 로 인식 여부 확인")
         print("    - 리본 케이블 방향/체결 확인")
-    for w in WARNINGS:
-        print(f"  ⚠ {w}")
     ready = py_ok and not missing and disk_ok and cam_ok
-    if ready and WARNINGS:
-        print("\n  실행은 되지만 위 경고를 두고 수집하면 데이터를 다시 찍어야 한다.")
-    elif ready:
-        print("\n  준비 완료 — calibrate.py 부터 시작하면 된다.")
-    else:
-        print("\n  위 항목을 먼저 해결할 것.")
+    print(f"\n  {'준비 완료 — calibrate.py 부터 시작하면 된다.' if ready else '위 항목을 먼저 해결할 것.'}")
     return 0 if ready else 1
 
 

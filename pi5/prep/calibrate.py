@@ -1,17 +1,26 @@
-"""카메라 캘리브레이션 — f_px, 주점, 왜곡계수를 구한다.
+"""카메라 캘리브레이션 — CAMERA_FX/FY/CX/CY 와 왜곡계수를 실측한다.
 
-    python calibrate.py capture --camera csi          # 체커보드 촬영
-    python calibrate.py solve   --camera csi          # 계산 -> JSON + config 스니펫
+    python calibrate.py capture          # 체커보드 촬영
+    python calibrate.py solve            # 계산 -> JSON + config.py 스니펫
+
+**이게 `pi5/TODO.md` 의 ★ 1번 항목("렌즈 초점거리 확인")을 끝낸다.**
+지금 `config.CAMERA_FX = 1739`는 "6mm 렌즈"라고 가정한 이론값이다. CS 마운트는
+백포커스를 나사로 돌려 맞추는 구조라 초점을 맞추는 과정에서 실효 초점거리가
+달라지고, 주점도 화면 정중앙이 아니다. **f가 10% 틀리면 깊이도 10% 틀어진다.**
+`solve`가 실측 f_px에서 렌즈 mm를 역산해주므로 렌즈 각인을 못 읽어도 확정된다.
 
 **카메라가 바뀌어도 코드는 동일하다.** 바뀌는 건 `--camera` 프로파일 하나뿐이고,
 그 안의 `calib_model`이 pinhole/fisheye를 자동으로 고른다 (camera.py 표 참고).
 
 왜 모델 구분이 중요한가:
-  화각이 90°를 넘으면 핀홀(r = f·tanθ)이 발산한다. GS 카메라의 2.8mm 렌즈는 대각 140°라
-  반드시 fisheye 모델을 써야 하고, 기본 CSI(~62°)는 pinhole로 충분하다.
-  (../docs/physics.md 7.2장)
+  화각이 90°를 넘으면 핀홀(r = f·tanθ)이 발산한다. 지금 config는 6mm(대각 55°)를
+  가정해 pinhole로 잡혀 있는데, 만약 실제 렌즈가 번들 2.8mm(대각 140°)라면
+  fisheye로 캘리브레이션해야 하고 `trajectory.py`의 선형 해법도 그대로는 못 쓴다
+  (uv를 먼저 핀홀 등가로 펴야 한다 — `pi5/fisheye.py` 참고).
+  근거: ../../docs/physics.md 7.2장
 
 체커보드: A4에 인쇄해 평평한 판에 붙인다. 기본값은 9x6 내부 코너, 25mm 격자.
+**데이터 수집을 막지 않는다** — capture_dataset.py는 초점거리를 쓰지 않는다.
 """
 
 from __future__ import annotations
@@ -27,6 +36,13 @@ import camera as camlib
 OUT_DIR = pathlib.Path("calib")
 MIN_SHOTS = 12          # 이보다 적으면 신뢰도가 떨어진다
 TARGET_SHOTS = 20
+
+# IMX296 픽셀 피치(mm). f_px -> 렌즈 mm 역산에 쓴다.
+# 센서가 바뀌면 이 값도 바뀐다 — IMX219는 1.12µm, IMX708은 1.4µm.
+DEFAULT_PIXEL_MM = 3.45e-3
+
+# pi5/TODO.md 의 렌즈 후보표 (IMX296 기준)
+LENS_TABLE = [(2.8, 812), (4.0, 1159), (6.0, 1739), (8.0, 2319), (12.0, 3478)]
 
 
 def _corners(gray, pattern, cv2):
@@ -45,10 +61,13 @@ def cmd_capture(args) -> int:
     out.mkdir(parents=True, exist_ok=True)
     pattern = (args.cols, args.rows)
 
-    cam = camlib.open_from_args(args)
+    cam = camlib.open_camera(args.camera, exposure_us=args.exposure_us, gain=args.gain,
+                             auto_lock=args.auto_lock_exposure,
+                             max_exposure_us=args.max_exposure_us, max_gain=args.max_gain)
     print("\n[조작]  SPACE 저장   Q 종료")
-    print("[요령]  화면 **가장자리와 모서리**를 반드시 채워라. 어안일수록 중요하다.")
-    print("        보드를 기울여 여러 각도로 찍어야 초점거리와 왜곡이 분리된다.\n")
+    print("[요령]  화면 **가장자리와 모서리**를 반드시 채워라. 화각이 넓을수록 중요하다.")
+    print("        보드를 기울여 여러 각도로 찍어야 초점거리와 왜곡이 분리된다.")
+    print("        체커보드는 정지 상태라 노출을 길게 줘도 된다 — 블러 걱정 없이 밝게 찍어라.\n")
 
     saved = 0
     # 화면을 3x3으로 나눠 어느 칸을 채웠는지 추적 (커버리지 부족이 가장 흔한 실패 원인)
@@ -151,32 +170,48 @@ def cmd_solve(args) -> int:
     dst = src / "calibration.json"
     dst.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
-    print(f"  RMS 재투영 오차 = {rms:.3f} px  {'(양호)' if rms < 1.0 else '(⚠ 1px 초과 — 재촬영 권장)'}")
+    print(f"  RMS 재투영 오차 = {rms:.3f} px  "
+          f"{'(양호)' if rms < 1.0 else '(⚠ 1px 초과 — 재촬영 권장)'}")
     print(f"  fx={fx:.1f}  fy={fy:.1f}  주점=({cx:.1f}, {cy:.1f})")
     print(f"  왜곡계수 = {[round(d, 5) for d in dist]}")
     print(f"  -> {dst}")
 
-    # 화각 (모델에 맞게)
+    # ── 화각 (모델에 맞게) ──────────────────────────────────────────────
     w, h = size
+    half = float(np.hypot(w / 2, h / 2))
     if model == "fisheye":
-        # cv2.fisheye는 등거리(r = f·θ) 기준이다. frames.py의 등입체각과 다르므로 주의.
-        half = float(np.hypot(w / 2, h / 2))
+        # cv2.fisheye는 등거리(r = f·θ) 기준이다
         diag = 2 * np.degrees(half / f_px)
         print(f"  대각 화각 ≈ {diag:.1f}°  (등거리 모델 기준)")
     else:
-        diag = 2 * np.degrees(np.arctan(float(np.hypot(w / 2, h / 2)) / f_px))
+        diag = 2 * np.degrees(np.arctan(half / f_px))
         print(f"  대각 화각 ≈ {diag:.1f}°")
 
-    print("\n--- catcher/config.py 에 반영할 값 ---")
-    print(f"FOCAL_LENGTH_PX = {f_px:.1f}")
-    print(f"PRINCIPAL_POINT_PX = ({cx:.1f}, {cy:.1f})")
-    print(f"DISTORTION_COEFFS = {tuple(round(d, 6) for d in dist)}")
-    if model == "fisheye":
-        print('PROJECTION_MODEL = "equisolid"   # ⚠ 아래 주의사항 확인')
-        print("\n⚠ cv2.fisheye는 **등거리**(r=f·θ) 모델이고 frames.py는 **등입체각**")
-        print("   (r=2f·sin(θ/2))을 쓴다. 위 대각 화각이 사양(140°)과 크게 다르면")
-        print("   frames.py의 PROJECTION_MODEL을 실제에 맞게 조정해야 한다.")
-        print("   판단 근거: ../docs/physics.md 7.2장의 모델별 f_eff 표")
+    # ── 렌즈 확정 (pi5/TODO.md ★ 1번) ──────────────────────────────────
+    lens_mm = f_px * args.pixel_mm
+    best = min(LENS_TABLE, key=lambda t: abs(t[1] - f_px))
+    print(f"\n--- 렌즈 확정 (TODO.md ★ 1번) ---")
+    print(f"  실측 f_px = {f_px:.0f}  ->  렌즈 초점거리 ≈ {lens_mm:.2f} mm")
+    print(f"  가장 가까운 표준 렌즈: {best[0]}mm (이론 f_px {best[1]})")
+    if abs(best[1] - f_px) / best[1] > 0.15:
+        print(f"  ⚠ 표준값과 15% 이상 차이난다. --pixel-mm({args.pixel_mm*1000:.2f}µm)가 "
+              f"이 센서에 맞는지 확인하라.")
+
+    if model == "pinhole" and diag > 90:
+        print(f"\n  ⚠⚠ 대각 화각 {diag:.0f}°인데 pinhole로 풀었다. 90°를 넘으면 핀홀이 "
+              f"성립하지 않는다.\n"
+              f"     --model fisheye 로 다시 풀고, trajectory.py 입력에 "
+              f"pi5/fisheye.py 를 끼워야 한다.")
+
+    # ── config.py 스니펫 ───────────────────────────────────────────────
+    print("\n--- pi5/config.py 에 반영할 값 ---")
+    print(f"CAMERA_FX = {fx:.1f}")
+    print(f"CAMERA_FY = {fy:.1f}")
+    print(f"CAMERA_CX = {cx:.1f}")
+    print(f"CAMERA_CY = {cy:.1f}")
+    print(f'CAMERA_MODEL = "{model}"')
+    print(f"CAMERA_DISTORTION = {tuple(round(d, 6) for d in dist)}")
+    print("\n반영 후 pi5/TODO.md 의 '렌즈 초점거리 확인'과 'CAMERA_FX/FY/CX/CY' 항목을 닫을 것.")
     return 0
 
 
@@ -192,6 +227,9 @@ def main() -> int:
         if name == "solve":
             p.add_argument("--model", choices=["pinhole", "fisheye"], default=None,
                            help="기본값은 카메라 프로파일의 calib_model")
+            p.add_argument("--pixel-mm", type=float, default=DEFAULT_PIXEL_MM,
+                           help="센서 픽셀 피치(mm). f_px -> 렌즈 mm 역산용. "
+                                "기본값은 IMX296의 3.45µm")
         p.set_defaults(func=fn)
     args = ap.parse_args()
     return args.func(args)
