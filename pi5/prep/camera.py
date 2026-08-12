@@ -248,6 +248,26 @@ class Camera:
             raise RuntimeError("프레임 읽기 실패")
         return frame, t
 
+    def set_manual(self, exposure_us: int | None = None, gain: float | None = None) -> None:
+        """실행 중에 노출/게인을 바꾼다 (Picamera2 전용, tune_camera.py가 씀).
+
+        재시작 없이 바로 반영된다 — AE/AWB는 계속 꺼둔 채로 값만 갱신한다.
+        """
+        if self._kind != "picamera2":
+            print("[camera] set_manual은 Picamera2 전용이다 — OpenCV 백엔드에서는 무시된다.")
+            return
+        controls: dict = {"AeEnable": False, "AwbEnable": False}
+        if exposure_us is not None:
+            controls["ExposureTime"] = exposure_us
+        if gain is not None:
+            controls["AnalogueGain"] = gain
+        self._impl.set_controls(controls)
+        self.spec = dataclasses.replace(
+            self.spec,
+            exposure_us=exposure_us if exposure_us is not None else self.spec.exposure_us,
+            gain=gain if gain is not None else self.spec.gain,
+        )
+
     def close(self) -> None:
         if self._impl is None:
             return
