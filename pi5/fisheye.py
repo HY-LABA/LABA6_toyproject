@@ -1,6 +1,7 @@
 """어안 픽셀 -> 핀홀 등가 픽셀 변환.
 
-**렌즈가 6mm(대각 55°)로 확정되면 이 파일은 필요 없다. 지우면 된다.**
+**렌즈가 좁은 화각(대각 90° 미만)으로 바뀌면 이 파일은 필요 없다.**
+지금 렌즈(번들 ZH3019-14, 대각 약 138°)에서는 **없으면 안 된다.**
 
 왜 있는가
 ---------
@@ -11,8 +12,9 @@
 
 이게 선형인 이유는 `u = fx·X/Z + cx`, 즉 **r = f·tanθ** 이기 때문이다.
 그런데 화각이 90°를 넘는 어안 렌즈는 이 식을 따르지 않는다 (tanθ가 발산한다).
-대각 140° 번들 렌즈라면 `r = 2f·sin(θ/2)`(등입체각)에 가깝다
-(근거: ../docs/physics.md 7.2장).
+번들 ZH3019-14는 **등거리(`r = f·θ`)** 다 — 사양의 D=148°/H=118° 비율이
+4:3 센서의 대각/폭 비 1.25를 0.3% 오차로 재현한다 (등입체각은 2.2% 어긋난다).
+근거: ../docs/physics.md 7.2장
 
 어안 픽셀을 그대로 넣으면 **관측 자체가 틀려서** 최소제곱이 조용히 잘못된
 거리를 뱉는다. 핀홀 기준 입사각 42°에서 z가 79%, 화면 끝에서 165% 어긋난다.
@@ -27,7 +29,7 @@
 --------------
 ① **캘리브레이션을 돌렸다면** (`prep/calibrate.py solve --model fisheye`)
    `cv2.fisheye.undistortPoints`가 정답이다. K와 D가 실측이라 모델 가정이 없다.
-② **아직 안 돌렸다면** 사양에서 역산한 등입체각 근사를 쓴다. 임시방편이다.
+② **아직 안 돌렸다면** 사양에서 역산한 등거리 근사를 쓴다. 임시방편이다.
 
 ①이 가능하면 언제나 ①을 쓴다. ②는 "렌즈가 어안인 건 아는데 캘리브레이션은
 아직"인 구간을 메우는 용도다.
@@ -50,17 +52,17 @@ def _focal() -> float:
     return (float(config.CAMERA_FX) + float(config.CAMERA_FY)) / 2.0
 
 
-def theta_from_radius(r_px: float, f_px: float, model: str = "equisolid") -> float:
+def theta_from_radius(r_px: float, f_px: float, model: str = "equidistant") -> float:
     """주점에서의 픽셀 거리 -> 입사각(rad)."""
     if model == "pinhole":
         return math.atan(r_px / f_px)
-    if model == "equidistant":            # cv2.fisheye 가 쓰는 모델: r = f·θ
-        return r_px / f_px
-    # equisolid: r = 2f·sin(θ/2)
-    return 2.0 * math.asin(min(1.0, r_px / (2.0 * f_px)))
+    if model == "equisolid":              # r = 2f·sin(θ/2)
+        return 2.0 * math.asin(min(1.0, r_px / (2.0 * f_px)))
+    # equidistant (기본): r = f·θ — 이 렌즈이자 cv2.fisheye 가 쓰는 모델
+    return r_px / f_px
 
 
-def ray_from_pixel(u: float, v: float, model: str = "equisolid") -> tuple[float, float]:
+def ray_from_pixel(u: float, v: float, model: str = "equidistant") -> tuple[float, float]:
     """픽셀 -> (입사각 theta, 방위각 phi). 광축이 theta=0이다."""
     cx, cy = _principal()
     du, dv = u - cx, -(v - cy)            # 이미지 y축은 아래로 증가하므로 뒤집는다
@@ -80,7 +82,7 @@ def to_pinhole_px(uv, model: str | None = None):
 
     if config.CAMERA_DISTORTION is not None:
         return _undistort_cv2(uv)
-    return _undistort_analytic(uv, model or "equisolid")
+    return _undistort_analytic(uv, model or "equidistant")
 
 
 def _undistort_cv2(uv: np.ndarray) -> np.ndarray:

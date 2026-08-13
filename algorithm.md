@@ -105,7 +105,7 @@ Y-식:  [   0,      0,  −fy, −fy·t,   b,  b·t ]   rhs = ½t²(fy·gy − b
 
 그래서 `vision._undistort`가 검출된 **점 하나만** 핀홀 등가 좌표로 옮긴 뒤 피팅에
 넣는다. 60 fps로 프레임 전체를 undistort하는 건 낭비다 — 프레임당 의미 있는 픽셀이
-한 점뿐이다. 근거는 [`docs/physics.md` 7.2장](docs/physics.md#72--이-렌즈는-핀홀이-아니다).
+한 점뿐이다. 근거는 [`docs/physics.md` 7.2장](docs/physics.md#72--이-렌즈는-핀홀이-아니다--등거리-어안이다).
 
 ---
 

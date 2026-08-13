@@ -65,6 +65,9 @@ def beep() -> None:
     sys.stdout.write("\a")
     sys.stdout.flush()
 
+# 카메라 frame -> MOG2(threshold) -> foreground mask -> OPEN/CLOSE -> conturs -> min_area/max_area
+# -> multi check -> edge check -> aspect check -> fill check -> bbox
+# 튜닝할 수 있는 부분: threshold, min_area, max_area, min_aspect, max_aspect, min_fill, edge_margin
 
 class BlobFinder:
     """MOG2 전경 마스크에서 '물체 하나'를 찾아낸다."""
@@ -166,12 +169,18 @@ def main() -> int:
     streak = 0
     tracking = False
     miss = 0
-    pending: list[tuple[np.ndarray, tuple[int, int, int, int]]] = []
+    pending: list[tuple[np.ndarray, tuple[int, int, int, int], float]] = []
+    throw = 0                     # 투척 회차. 확정될 때마다 1씩 오른다
+    # 프레임별 (파일명, 촬영시각, 투척번호). review_labels.py 의 자동 선별이 쓴다 —
+    # 한 세션에 여러 번 던지므로 **어느 프레임이 같은 투척인지** 알아야 궤적을
+    # 피팅할 수 있고, 저장 번호는 건너뛴 프레임 때문에 시간 간격과 비례하지 않는다.
+    frame_meta: list[dict] = []
     paused = False
     reasons: dict[str, int] = {}
     fps_log: list[float] = []
 
-    def _save(save_frame: np.ndarray, save_box: tuple[int, int, int, int]) -> None:
+    def _save(save_frame: np.ndarray, save_box: tuple[int, int, int, int],
+              t_cap: float) -> None:
         nonlocal saved
         x, y, w, h = save_box
         name = f"{session}_{saved:05d}"
@@ -181,6 +190,7 @@ def main() -> int:
         (out_lbl / f"{name}.txt").write_text(
             f"{cls_id} {(x + w / 2) / W:.6f} {(y + h / 2) / H:.6f} "
             f"{w / W:.6f} {h / H:.6f}\n", encoding="utf-8")
+        frame_meta.append({"name": f"{name}.jpg", "t": round(t_cap, 6), "throw": throw})
         saved += 1
         beep()
 
@@ -195,7 +205,7 @@ def main() -> int:
         n = 0
         fps_t0 = time.monotonic()
         while args.max_frames == 0 or n < args.max_frames:
-            frame, _ = cam.read()
+            frame, t_cap = cam.read()
             n += 1
             if paused:
                 cv2.imshow("capture (paused)", frame)
@@ -213,13 +223,14 @@ def main() -> int:
                 # 순간의 우연한 블롭 하나로 오검출되는 걸 막는다).
                 if box:
                     streak += 1
-                    pending.append((frame.copy(), box))
+                    pending.append((frame.copy(), box, t_cap))
                     good = True
                     if streak >= args.arm_frames:
                         # 확정 — 그동안 모아둔 프레임까지 전부 저장하고 추적 시작.
                         # 예전엔 이 프레임들이 그냥 버려졌다.
-                        for pframe, pbox in pending:
-                            _save(pframe, pbox)
+                        throw += 1
+                        for pframe, pbox, pt in pending:
+                            _save(pframe, pbox, pt)
                         pending.clear()
                         tracking = True
                         miss = 0
@@ -230,7 +241,7 @@ def main() -> int:
                 # 확정된 물체를 추적 중 — 사라질 때까지 매 프레임 저장한다.
                 if box:
                     miss = 0
-                    _save(frame, box)
+                    _save(frame, box, t_cap)
                     good = True
                 else:
                     miss += 1
@@ -290,9 +301,16 @@ def main() -> int:
     manifest = ROOT / "sessions.json"
     data = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else {}
     data[session] = {"label": args.label, "class_id": cls_id, "camera": args.camera,
-                     "frames": saved, "note": args.session_note, "created": stamp,
-                     "image_size": [W, H]}
+                     "frames": saved, "throws": throw, "note": args.session_note,
+                     "created": stamp, "image_size": [W, H]}
     manifest.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # 프레임별 시각·투척번호는 세션마다 따로 둔다 (파일명은 건드리지 않는다 —
+    # 건드리면 dropped.json 과 prepare_dataset.py 가 같이 흔들린다).
+    meta_dir = ROOT / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / f"{session}.json").write_text(
+        json.dumps(frame_meta, indent=1), encoding="utf-8")
 
     # 절대경로로 찍는다. ROOT 가 상대경로라 실행 디렉토리에 따라 위치가 바뀌고,
     # 그 때문에 "폴더는 생겼는데 사진을 못 찾겠다"가 실제로 한 번 발생했다.
