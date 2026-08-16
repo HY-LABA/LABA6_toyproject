@@ -268,19 +268,35 @@ class Camera:
             gain=gain if gain is not None else self.spec.gain,
         )
 
-    def start_recording(self, path: str, bitrate: int = 20_000_000) -> None:
-        """H.264 영상 녹화 시작 (Picamera2 전용, capture_video.py가 씀).
+    def start_recording(self, path: str, bitrate: int = 20_000_000,
+                         codec: str = "h264") -> None:
+        """영상 녹화 시작 (Picamera2 전용, capture_video.py가 씀).
 
-        MOG2/imwrite 없이 하드웨어 인코더로 바로 쓰므로 캡처 중 Python 처리로
-        인한 프레임 드랍이 없다. ffmpeg가 시스템에 설치돼 있어야 한다
-        (`sudo apt install ffmpeg`).
+        MOG2/imwrite 없이 인코더로 바로 쓰므로 캡처 중 Python 처리로 인한 프레임
+        드랍이 없다 — 단, 인코딩 자체가 병목이 될 수 있다.
+
+        ⚠ 라즈베리파이 5는 하드웨어 H.264 인코더가 없다(Pi4까지는 있었음). 그래서
+        `codec="h264"`는 소프트웨어 인코딩이라 1456x1088@60fps를 못 따라가면
+        녹화 중 자체적으로 프레임이 밀릴 수 있다. `codec="mjpeg"`는 프레임마다
+        독립적으로 JPEG 압축하는 방식이라 계산이 훨씬 가볍고(모션 보상 없음),
+        capture_dataset.py가 원래 쓰던 프레임 단위 JPEG 압축과 특성이 같아
+        검출 노이즈 걱정도 덜하다. 대신 파일 용량은 더 크다. 어느 쪽이 실제로
+        fps를 잘 유지하는지는 실기에서 확인해야 한다.
+
+        ffmpeg가 시스템에 설치돼 있어야 한다 (`sudo apt install ffmpeg`).
         """
         if self._kind != "picamera2":
             raise RuntimeError("영상 녹화는 Picamera2 전용이다.")
-        from picamera2.encoders import H264Encoder
         from picamera2.outputs import FfmpegOutput
 
-        self._encoder = H264Encoder(bitrate=bitrate)
+        if codec == "h264":
+            from picamera2.encoders import H264Encoder
+            self._encoder = H264Encoder(bitrate=bitrate)
+        elif codec == "mjpeg":
+            from picamera2.encoders import MJPEGEncoder
+            self._encoder = MJPEGEncoder(bitrate=bitrate)
+        else:
+            raise ValueError(f"알 수 없는 codec: {codec!r} ('h264' 또는 'mjpeg')")
         self._impl.start_recording(self._encoder, FfmpegOutput(path))
 
     def stop_recording(self) -> None:

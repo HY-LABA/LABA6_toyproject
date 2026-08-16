@@ -11,6 +11,11 @@
 continuous 모드는 재시작 없이 여러 번 던질 수 있어서, clip 모드보다 매 던지기마다
 드는 오버헤드(카운트다운 등)가 없다 — 그냥 계속 던지면 된다.
 
+⚠ 파이5는 하드웨어 H.264 인코더가 없다. `--codec h264`(기본)가 60fps를 못 따라가면
+`--codec mjpeg`로 바꿔볼 것 — 계산이 가벼워 fps 유지에 유리하고, 압축 방식도
+capture_dataset.py가 쓰는 프레임 단위 JPEG와 같아 검출 노이즈 부담도 적다.
+대신 파일 용량은 더 크다. 어느 쪽이 나은지는 실제로 비교해봐야 한다.
+
 ⚠ ffmpeg가 시스템에 설치돼 있어야 한다: `sudo apt install ffmpeg`
 
 출력: capture_sessions/session_YYYYMMDD_HHMMSS/clips/*.mp4 + session.json
@@ -32,6 +37,31 @@ from capture_dataset import CLASSES
 ROOT = pathlib.Path("capture_sessions")
 
 
+def _check_fps(path: pathlib.Path, expected_seconds: float, expected_fps: int,
+               codec: str) -> None:
+    """녹화가 실제로 설정 fps를 유지했는지 파일을 다시 열어 확인한다.
+
+    인코더가 못 따라가면 그 자리에서 에러를 내는 게 아니라 그냥 프레임을 덜
+    써서 조용히 fps가 낮아진다 — 재생해보기 전엔 알 방법이 없어서 여기서 대신
+    확인해준다.
+    """
+    import cv2
+
+    cap = cv2.VideoCapture(str(path))
+    n = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    cap.release()
+    expected = expected_seconds * expected_fps
+    if n <= 0:
+        print("  ⚠ 프레임 수를 못 읽었다 — 파일이 제대로 안 만들어졌을 수 있다.")
+        return
+    actual_fps = n / expected_seconds
+    print(f"  {n:.0f}장 기록됨 (기대 {expected:.0f}장 근처, 실효 ~{actual_fps:.0f}fps)")
+    if n < expected * 0.8:
+        other = "mjpeg" if codec == "h264" else "h264"
+        print(f"  ⚠ 설정({expected_fps}fps)보다 많이 낮다 — 인코더가 못 따라간 것 같다. "
+              f"--codec {other}로 바꿔서 비교해볼 것.")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -42,8 +72,12 @@ def main() -> int:
     ap.add_argument("--continuous", type=float, default=None, metavar="SECS",
                     help="영상 하나로 길게 녹화 — 재시작 없이 계속 던지기")
     ap.add_argument("--bitrate", type=int, default=20_000_000,
-                    help="H.264 비트레이트. 낮추면 빠른 움직임에 압축 아티팩트가 "
+                    help="인코더 비트레이트. 낮추면 빠른 움직임에 압축 아티팩트가 "
                          "생겨 배경차분이 노이즈로 오인할 수 있다.")
+    ap.add_argument("--codec", choices=["h264", "mjpeg"], default="h264",
+                    help="h264는 파일이 작지만 파이5엔 하드웨어 인코더가 없어 "
+                         "60fps를 못 따라갈 수 있다. 그러면 mjpeg로 바꿀 것 "
+                         "(계산이 가볍고 압축 특성도 기존 프레임 저장 방식과 같음).")
     args = ap.parse_args()
 
     cam = camlib.open_camera(args.camera, exposure_us=args.exposure_us, gain=args.gain,
@@ -67,6 +101,7 @@ def main() -> int:
         "gain": cam.spec.gain,
         "resolution": [cam.spec.width, cam.spec.height],
         "fps": cam.spec.fps,
+        "codec": args.codec,
         "clips": [],
     }
 
@@ -74,12 +109,13 @@ def main() -> int:
         if args.continuous:
             name = f"{args.label}_continuous.mp4"
             print(f"\n{args.continuous:.0f}초 녹화 시작 — 자유롭게 던지세요.\n")
-            cam.start_recording(str(clipdir / name), bitrate=args.bitrate)
+            cam.start_recording(str(clipdir / name), bitrate=args.bitrate, codec=args.codec)
             time.sleep(args.continuous)
             cam.stop_recording()
             meta["clips"].append({"file": name, "label": args.label, "mode": "continuous",
                                   "seconds": args.continuous})
             print(f"저장: {name}")
+            _check_fps(clipdir / name, args.continuous, cam.spec.fps, args.codec)
         else:
             print("\n[조작] Enter=녹화 시작(카운트다운 후)   q, Enter=종료\n")
             n = 0
@@ -93,12 +129,14 @@ def main() -> int:
                     print(f"  {sec}...")
                     time.sleep(1)
                 print("  던져!")
-                cam.start_recording(str(clipdir / name), bitrate=args.bitrate)
+                cam.start_recording(str(clipdir / name), bitrate=args.bitrate, codec=args.codec)
                 time.sleep(args.seconds)
                 cam.stop_recording()
                 meta["clips"].append({"file": name, "label": args.label, "mode": "clip",
                                       "seconds": args.seconds})
-                print(f"  저장: {name}\n")
+                print(f"  저장: {name}")
+                _check_fps(clipdir / name, args.seconds, cam.spec.fps, args.codec)
+                print()
     except KeyboardInterrupt:
         print("\n중단 — 지금까지 녹화된 클립은 그대로 남아있다.")
     finally:
