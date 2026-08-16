@@ -268,6 +268,26 @@ class Camera:
             gain=gain if gain is not None else self.spec.gain,
         )
 
+    def start_recording(self, path: str, bitrate: int = 20_000_000) -> None:
+        """H.264 영상 녹화 시작 (Picamera2 전용, capture_video.py가 씀).
+
+        MOG2/imwrite 없이 하드웨어 인코더로 바로 쓰므로 캡처 중 Python 처리로
+        인한 프레임 드랍이 없다. ffmpeg가 시스템에 설치돼 있어야 한다
+        (`sudo apt install ffmpeg`).
+        """
+        if self._kind != "picamera2":
+            raise RuntimeError("영상 녹화는 Picamera2 전용이다.")
+        from picamera2.encoders import H264Encoder
+        from picamera2.outputs import FfmpegOutput
+
+        self._encoder = H264Encoder(bitrate=bitrate)
+        self._impl.start_recording(self._encoder, FfmpegOutput(path))
+
+    def stop_recording(self) -> None:
+        if self._kind == "picamera2" and getattr(self, "_encoder", None) is not None:
+            self._impl.stop_recording()
+            self._encoder = None
+
     def close(self) -> None:
         if self._impl is None:
             return
