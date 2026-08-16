@@ -11,10 +11,12 @@
 continuous 모드는 재시작 없이 여러 번 던질 수 있어서, clip 모드보다 매 던지기마다
 드는 오버헤드(카운트다운 등)가 없다 — 그냥 계속 던지면 된다.
 
-⚠ 파이5는 하드웨어 H.264 인코더가 없다. `--codec h264`(기본)가 60fps를 못 따라가면
-`--codec mjpeg`로 바꿔볼 것 — 계산이 가벼워 fps 유지에 유리하고, 압축 방식도
-capture_dataset.py가 쓰는 프레임 단위 JPEG와 같아 검출 노이즈 부담도 적다.
-대신 파일 용량은 더 크다. 어느 쪽이 나은지는 실제로 비교해봐야 한다.
+⚠ 기본 코덱은 mjpeg다 — 파이5는 하드웨어 H.264 인코더가 없어서(Pi4까지는 있었음)
+h264는 60fps를 못 따라갈 위험이 있고, 압축 아티팩트가 배경차분에 노이즈로 잡힐
+수도 있다. mjpeg는 계산이 가볍고 capture_dataset.py가 쓰는 프레임 단위 JPEG와
+압축 특성이 같다. 파일 용량이 더 크지만 짧은 클립이라 문제 안 될 것으로 판단해
+기본으로 걸어뒀다. 용량이 아쉬우면 `--codec h264`로 바꿔도 된다(fps 자동 검증이
+같이 찍히니 문제 있으면 바로 보임).
 
 ⚠ ffmpeg가 시스템에 설치돼 있어야 한다: `sudo apt install ffmpeg`
 
@@ -74,10 +76,13 @@ def main() -> int:
     ap.add_argument("--bitrate", type=int, default=20_000_000,
                     help="인코더 비트레이트. 낮추면 빠른 움직임에 압축 아티팩트가 "
                          "생겨 배경차분이 노이즈로 오인할 수 있다.")
-    ap.add_argument("--codec", choices=["h264", "mjpeg"], default="h264",
-                    help="h264는 파일이 작지만 파이5엔 하드웨어 인코더가 없어 "
-                         "60fps를 못 따라갈 수 있다. 그러면 mjpeg로 바꿀 것 "
-                         "(계산이 가볍고 압축 특성도 기존 프레임 저장 방식과 같음).")
+    ap.add_argument("--codec", choices=["h264", "mjpeg"], default="mjpeg",
+                    help="기본 mjpeg — 파이5는 하드웨어 H.264 인코더가 없어 h264는 "
+                         "60fps를 못 따라갈 위험이 있고, 압축 아티팩트가 배경차분에 "
+                         "노이즈로 잡힐 수도 있다(Jay capture_pipeline에서도 같은 "
+                         "우려). mjpeg는 계산이 가볍고 기존에 검증된 프레임 단위 "
+                         "JPEG 저장과 압축 특성이 같다. 파일 용량이 커도 괜찮으면 "
+                         "h264로 바꿔서 더 작게 받을 수 있다.")
     args = ap.parse_args()
 
     cam = camlib.open_camera(args.camera, exposure_us=args.exposure_us, gain=args.gain,
