@@ -30,14 +30,13 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
-import sys
 import time
 from datetime import datetime
 
 import numpy as np
 
 import camera as camlib
-from capture_dataset import CLASSES
+from capture_dataset import CLASSES, beep
 
 ROOT = pathlib.Path("capture_sessions")
 
@@ -51,8 +50,8 @@ def _record_with_buzzer(cam, seconds: float, enabled: bool, threshold: float = 6
     없다 — capture_dataset.py처럼 매 프레임 MOG2를 돌리는 게 아니라, 320x240
     흑백 프레임 하나만 초당 몇 번 diff 떠보는 정도라 훨씬 가볍다.
 
-    ⚠ 터미널 벨은 환경(SSH/원격 데스크톱 터미널 설정)에 따라 안 들릴 수 있다 —
-    capture_dataset.py의 beep()과 같은 방식을 재사용한 것이다.
+    capture_dataset.py의 beep()을 그대로 재사용한다 — 거기서 이미 잘 울리는 걸
+    확인했으니 같은 함수를 쓰는 게 맞다.
     """
     if not enabled:
         time.sleep(seconds)
@@ -70,8 +69,7 @@ def _record_with_buzzer(cam, seconds: float, enabled: bool, threshold: float = 6
         diff = float(np.abs(gray - bg).mean())
         moving = diff > threshold
         if moving and not was_moving:
-            sys.stdout.write("\a")
-            sys.stdout.flush()
+            beep()
         was_moving = moving
         bg = bg * 0.9 + gray * 0.1   # 서서히 배경 갱신 (지수이동평균)
         elapsed = time.monotonic() - t0
