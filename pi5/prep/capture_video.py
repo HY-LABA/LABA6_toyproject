@@ -30,13 +30,53 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import sys
 import time
 from datetime import datetime
+
+import numpy as np
 
 import camera as camlib
 from capture_dataset import CLASSES
 
 ROOT = pathlib.Path("capture_sessions")
+
+
+def _record_with_buzzer(cam, seconds: float, enabled: bool, threshold: float = 6.0,
+                        check_hz: float = 15.0) -> None:
+    """녹화 시간만큼 대기한다. buzzer가 켜져 있으면 저해상도 보조 스트림(lores)으로
+    가볍게 움직임을 체크해서, 물체가 지나가는 동안 터미널 벨(\\a)을 울린다.
+
+    메인 녹화(인코더가 쓰는 스트림)와는 완전히 다른 경로라 녹화 자체엔 영향이
+    없다 — capture_dataset.py처럼 매 프레임 MOG2를 돌리는 게 아니라, 320x240
+    흑백 프레임 하나만 초당 몇 번 diff 떠보는 정도라 훨씬 가볍다.
+
+    ⚠ 터미널 벨은 환경(SSH/원격 데스크톱 터미널 설정)에 따라 안 들릴 수 있다 —
+    capture_dataset.py의 beep()과 같은 방식을 재사용한 것이다.
+    """
+    if not enabled:
+        time.sleep(seconds)
+        return
+
+    period = 1.0 / check_hz
+    t_end = time.monotonic() + seconds
+    bg = None
+    was_moving = False
+    while time.monotonic() < t_end:
+        t0 = time.monotonic()
+        gray = cam.capture_lores().astype(np.float32)
+        if bg is None:
+            bg = gray
+        diff = float(np.abs(gray - bg).mean())
+        moving = diff > threshold
+        if moving and not was_moving:
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+        was_moving = moving
+        bg = bg * 0.9 + gray * 0.1   # 서서히 배경 갱신 (지수이동평균)
+        elapsed = time.monotonic() - t0
+        if elapsed < period:
+            time.sleep(period - elapsed)
 
 
 def _check_fps(path: pathlib.Path, expected_seconds: float, expected_fps: int,
@@ -83,11 +123,18 @@ def main() -> int:
                          "우려). mjpeg는 계산이 가볍고 기존에 검증된 프레임 단위 "
                          "JPEG 저장과 압축 특성이 같다. 파일 용량이 커도 괜찮으면 "
                          "h264로 바꿔서 더 작게 받을 수 있다.")
+    ap.add_argument("--buzzer", action=argparse.BooleanOptionalAction, default=True,
+                    help="물체가 지나가는 동안 터미널 벨을 울린다 (저해상도 보조 "
+                         "스트림으로 가볍게 체크 — 메인 녹화엔 영향 없음). "
+                         "안 들리거나 끄고 싶으면 --no-buzzer.")
+    ap.add_argument("--buzzer-threshold", type=float, default=6.0,
+                    help="움직임 감지 민감도 (낮을수록 민감, 오탐 늘어남)")
     args = ap.parse_args()
 
     cam = camlib.open_camera(args.camera, exposure_us=args.exposure_us, gain=args.gain,
                               auto_lock=args.auto_lock_exposure,
-                              max_exposure_us=args.max_exposure_us, max_gain=args.max_gain)
+                              max_exposure_us=args.max_exposure_us, max_gain=args.max_gain,
+                              want_lores=args.buzzer)
     if cam.backend != "picamera2":
         print("[에러] 영상 녹화는 Picamera2 전용이다 (webcam 프로파일로는 안 됨).")
         cam.close()
@@ -115,7 +162,7 @@ def main() -> int:
             name = f"{args.label}_continuous.mp4"
             print(f"\n{args.continuous:.0f}초 녹화 시작 — 자유롭게 던지세요.\n")
             cam.start_recording(str(clipdir / name), bitrate=args.bitrate, codec=args.codec)
-            time.sleep(args.continuous)
+            _record_with_buzzer(cam, args.continuous, args.buzzer, args.buzzer_threshold)
             cam.stop_recording()
             meta["clips"].append({"file": name, "label": args.label, "mode": "continuous",
                                   "seconds": args.continuous})
@@ -135,7 +182,7 @@ def main() -> int:
                     time.sleep(1)
                 print("  던져!")
                 cam.start_recording(str(clipdir / name), bitrate=args.bitrate, codec=args.codec)
-                time.sleep(args.seconds)
+                _record_with_buzzer(cam, args.seconds, args.buzzer, args.buzzer_threshold)
                 cam.stop_recording()
                 meta["clips"].append({"file": name, "label": args.label, "mode": "clip",
                                       "seconds": args.seconds})

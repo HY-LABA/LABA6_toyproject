@@ -71,14 +71,15 @@ SPECS: dict[str, CameraSpec] = {
     "gs": CameraSpec(
         name="InnoMaker CAM-IMX296Color-GS + 6mm CS 렌즈",
         width=1456, height=1088, fps=60,
-        calib_model="pinhole", exposure_us=1000, gain=4.0,
-        max_exposure_us=1000, max_gain=32.0,   # auto_lock이 그 이상으로 늘리지 못하게
+        calib_model="pinhole", exposure_us=2000, gain=9.0,
+        max_exposure_us=2000, max_gain=32.0,   # auto_lock이 그 이상으로 늘리지 못하게
                                                 # 상한을 exposure_us와 같이 잡아뒀다.
-                                                # ⚠ 16.0에서 32.0으로 올림(2026-08-12) — 실내
-                                                # 조명에서 너무 어둡게 찍히는 문제 때문. 노출은
-                                                # 그대로 1ms로 묶어 블러 억제는 유지하고, 게인만
-                                                # 더 허용해 빛을 보충한다. 노이즈는 늘어나므로
-                                                # 찍힌 사진이 너무 지글거리면 낮출 것.
+                                                # ⚠ 실측으로 확정(2026-08-12, tune_camera.py):
+                                                # exposure_us=2000/gain=9 조합이 밝기(mean≈80,
+                                                # 건강 범위 40~200)와 노이즈 둘 다 괜찮았다.
+                                                # 블러 계산상(2ms×1.5~2m/s≈3~4mm) 여유도 있음.
+                                                # max_gain=32는 그보다 어두운 조명을 만났을 때의
+                                                # 안전 상한으로 남겨둠 — 실제 동작점은 9 근처.
         note="라즈베리파이 공식 GS 카메라와 동일 스펙(제조사가 호환품으로 표기). "
              "Sony IMX296 Color, 1456x1088, 픽셀 3.45µm, 센서 대각 6.3mm(1/2.9\"), "
              "글로벌 셔터, 최대 60fps, C/CS 마운트, 최소 노출 30µs. "
@@ -120,9 +121,11 @@ DEFAULT = "gs"
 class Camera:
     """Picamera2(라파이) 또는 OpenCV(웹캠/USB)를 같은 인터페이스로 감싼다."""
 
-    def __init__(self, spec: CameraSpec, backend: str = "auto", auto_lock: bool = False) -> None:
+    def __init__(self, spec: CameraSpec, backend: str = "auto", auto_lock: bool = False,
+                 want_lores: bool = False) -> None:
         self.spec = spec
         self.auto_lock = auto_lock
+        self.want_lores = want_lores
         self._impl = None
         self._kind = None
 
@@ -143,8 +146,12 @@ class Camera:
         from picamera2 import Picamera2  # 라파이에만 있다
 
         cam = Picamera2()
+        # want_lores: 녹화 중 가벼운 움직임 감지(버저용)를 하려고 저해상도 보조
+        # 스트림을 따로 연다. 메인 스트림(녹화용)과 별개 경로라 인코더에 영향 없다.
+        lores = {"size": (320, 240), "format": "YUV420"} if self.want_lores else None
         cfg = cam.create_video_configuration(
             main={"size": (self.spec.width, self.spec.height), "format": "RGB888"},
+            lores=lores,
             controls={"FrameRate": float(self.spec.fps)},
         )
         cam.configure(cfg)
@@ -248,6 +255,20 @@ class Camera:
             raise RuntimeError("프레임 읽기 실패")
         return frame, t
 
+    def capture_lores(self) -> np.ndarray:
+        """저해상도 보조 스트림에서 밝기(흑백) 프레임만 뽑는다.
+
+        want_lores=True로 열었을 때만 쓸 수 있다. capture_video.py가 녹화 중
+        가벼운 움직임 감지(버저)용으로 쓴다 — 메인 스트림/인코더와는 무관하다.
+        """
+        if self._kind != "picamera2" or not self.want_lores:
+            raise RuntimeError("capture_lores는 want_lores=True로 연 Picamera2에서만 된다.")
+        arr = self._impl.capture_array("lores")
+        # YUV420 평면 배열: 위쪽 2/3가 밝기(Y) 평면이다. 움직임 감지엔 밝기면 충분해서
+        # 색상(U/V) 평면은 버린다.
+        y_h = arr.shape[0] * 2 // 3
+        return arr[:y_h]
+
     def set_manual(self, exposure_us: int | None = None, gain: float | None = None) -> None:
         """실행 중에 노출/게인을 바꾼다 (Picamera2 전용, tune_camera.py가 씀).
 
@@ -317,7 +338,8 @@ class Camera:
 def open_camera(profile: str = DEFAULT, backend: str = "auto",
                  exposure_us: int | None = None, gain: float | None = None,
                  auto_lock: bool | None = None,
-                 max_exposure_us: int | None = None, max_gain: float | None = None) -> Camera:
+                 max_exposure_us: int | None = None, max_gain: float | None = None,
+                 want_lores: bool = False) -> Camera:
     """auto_lock=None(기본)이면: 수동으로 exposure_us/gain을 안 줬을 때만 자동측정 후
     고정한다. 매번 킬 때 조명이 뭐가 됐든 알아서 재고 고정하는 게 기본 동작이고,
     명시적으로 숫자를 준 경우에만 그 숫자를 존중해 자동측정을 건너뛴다.
@@ -346,7 +368,7 @@ def open_camera(profile: str = DEFAULT, backend: str = "auto",
         overrides["max_gain"] = max_gain
     if overrides:
         spec = dataclasses.replace(spec, **overrides)
-    cam = Camera(spec, backend, auto_lock=auto_lock)
+    cam = Camera(spec, backend, auto_lock=auto_lock, want_lores=want_lores)
     spec = cam.spec   # auto_lock이면 여기서 실측값으로 갱신돼 있다
     print(f"[camera] {spec.name} ({spec.width}x{spec.height} @{spec.fps}fps, "
           f"backend={cam.backend}, calib={spec.calib_model}, "
