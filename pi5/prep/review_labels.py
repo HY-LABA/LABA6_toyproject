@@ -24,6 +24,7 @@
 [조작]
     → / ←      다음 / 이전 (안 먹히면 `.`/`,` 또는 `l`/`j`)
     +  / -      (--zoom일 때) 물체 중심으로 확대 / 축소
+    F          (--zoom일 때) 전체화면 즉시 토글 (다시 F 누르면 확대 상태로 복귀)
     D          이 프레임 버림 (라벨+이미지 삭제 표시)
     K          유지 (기본값)
     A          bbox 수동 조정 모드 (드래그로 다시 그림)
@@ -103,7 +104,7 @@ def main() -> int:
 
     i = 0
     drag = {"on": False, "p0": None, "p1": None}
-    zoom_state = {"pad_mult": 1.0}   # +/- 로 조절, 물체 중심 유지한 채 확대범위만 바뀜
+    zoom_state = {"pad_mult": 1.0, "full": False}   # +/- 로 세밀 조절, F로 전체화면 토글
 
     def on_mouse(event, x, y, flags, _):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -122,7 +123,7 @@ def main() -> int:
         H, W = img.shape[:2]
         lab = load_label(lbl_p)
 
-        if args.zoom:
+        if args.zoom and not zoom_state["full"]:
             zx0, zy0, zx1, zy1, zscale = _zoom_region(lab, W, H, pad_frac=0.6 * zoom_state["pad_mult"])
         else:
             zx0, zy0, zx1, zy1, zscale = 0, 0, W, H, 1
@@ -152,7 +153,12 @@ def main() -> int:
             cv2.rectangle(view, drag["p0"], drag["p1"], (255, 200, 0), 2)
 
         status = "DROP" if str(img_p) in dropped else "keep"
-        zoom_tag = f" [ZOOM x{zoom_state['pad_mult']:.1f}]" if args.zoom else ""
+        if not args.zoom:
+            zoom_tag = ""
+        elif zoom_state["full"]:
+            zoom_tag = " [FULL — F로 확대복귀]"
+        else:
+            zoom_tag = f" [ZOOM x{zoom_state['pad_mult']:.1f} — F로 전체화면]"
         cv2.putText(view, f"[{i+1}/{len(items)}] {status}  {img_p.parent.name}{zoom_tag}",
                     (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.imshow("review", view)
@@ -185,6 +191,10 @@ def main() -> int:
             # 축소 — 물체가 화면 밖으로 나갈 만큼 큰 경우(예: 라벨만 잡힌 투명 물병)
             # 전체화면으로 점프하는 대신 물체 중심을 유지한 채 범위만 넓힌다
             zoom_state["pad_mult"] = min(15.0, zoom_state["pad_mult"] * 1.4)
+        elif key == ord("f"):
+            # 전체화면 즉시 토글 — +/-는 점진적 조절이라 화면 전체를 한번에 보고
+            # 싶을 때(예: 물체 위치 자체를 놓친 것 같을 때)는 이게 더 빠르다.
+            zoom_state["full"] = not zoom_state["full"]
         elif key == ord("s"):
             drop_file.write_text(json.dumps(sorted(dropped), indent=2), encoding="utf-8")
             print(f"  저장: 버림 {len(dropped)}건")
