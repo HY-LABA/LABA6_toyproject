@@ -45,15 +45,33 @@ def process_clip(path: pathlib.Path, cls_id: int, args,
 
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     finder = BlobFinder(cv2, args, w * h)
+
+    frame_idx = 0
+    next_pct = 10
+
+    def _progress() -> None:
+        # 10%씩만 찍는다 — 오래 걸리는(1~3분) 작업인데 진행 상황이 전혀 안 보이면
+        # 멈춘 건지 도는 건지 알 수가 없다. 그렇다고 매 프레임 찍으면 그 자체가
+        # 콘솔 출력 병목이 되니 10% 단위로만.
+        nonlocal next_pct
+        if total <= 0:
+            return
+        pct = frame_idx * 100 // total
+        while pct >= next_pct and next_pct <= 100:
+            print(f"  {next_pct}%...")
+            next_pct += 10
 
     # 클립 앞부분은 카운트다운 직후라 보통 빈 화면이다 — 그걸로 배경을 학습한다.
     for _ in range(args.warmup):
         ok, frame = cap.read()
+        frame_idx += 1
         if not ok:
             cap.release()
             return 0, {}
         finder(frame, learning_rate=-1)
+        _progress()
 
     saved = 0
     streak = 0
@@ -81,6 +99,8 @@ def process_clip(path: pathlib.Path, cls_id: int, args,
         ok, frame = cap.read()
         if not ok:
             break
+        frame_idx += 1
+        _progress()
 
         mask, box, why = finder(frame, learning_rate=0.0)
         reasons[why] = reasons.get(why, 0) + 1
