@@ -45,13 +45,13 @@ import argparse
 import datetime as dt
 import json
 import pathlib
-import queue
 import statistics
 import sys
-import threading
 import time
+import types
 
 import camera as camlib
+from frame_saver import FrameSaver
 
 CLASSES = ["trash"]          # review_labels.py / prepare_dataset.py 와 동일해야 한다
 ROOT = pathlib.Path("dataset_raw")
@@ -64,63 +64,38 @@ def beep() -> None:
     sys.stdout.flush()
 
 
-# ── 저장 (백그라운드 스레드) ──────────────────────────────────────────────
+# ── 입력원 ────────────────────────────────────────────────────────────────
 
-class FrameSaver:
-    """JPEG 인코딩과 디스크 쓰기를 캡처 루프 밖으로 뺀다.
+class ReplaySource:
+    """record_raw.py 로 녹화한 프레임을 **카메라처럼** 읽는다.
 
-    1456x1088 을 품질 95로 인코딩해 SD카드에 쓰는 건 60fps 프레임 예산(16.7ms)을
-    넘기기 쉽다. 그리고 하필 **물체를 추적 중일 때** 매 프레임 발생하므로, 프레임이
-    제일 필요한 순간에 프레임을 놓친다.
-
-    파일 이름과 메타데이터는 **제출 시점(메인 스레드)에 확정**한다 — 그래야 저장
-    순서가 스레드 스케줄링에 따라 뒤바뀌지 않는다.
+    tune_params.py 로 찾은 파라미터를 녹화본 전체에 적용해 라벨을 뽑을 때 쓴다.
+    실시간 카메라와 같은 인터페이스라 아래 루프는 손댈 필요가 없다.
     """
 
-    def __init__(self, cv2, out_img: pathlib.Path, out_lbl: pathlib.Path,
-                 quality: int, maxsize: int = 256) -> None:
+    def __init__(self, cv2, session_dir: pathlib.Path) -> None:
+        meta = json.loads((session_dir / "meta.json").read_text(encoding="utf-8"))
         self.cv2 = cv2
-        self.out_img = out_img
-        self.out_lbl = out_lbl
-        self.params = [cv2.IMWRITE_JPEG_QUALITY, int(quality)]
-        self.q: queue.Queue = queue.Queue(maxsize=maxsize)
-        self.dropped = 0
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        self.dir = session_dir / "frames"
+        self.frames = meta["frames"]
+        self.n_warmup = sum(1 for f in self.frames if f["warmup"])
+        self.spec = types.SimpleNamespace(fps=meta.get("fps_setting", 30),
+                                          exposure_us=meta.get("exposure_us"),
+                                          gain=meta.get("gain"),
+                                          name=f"replay({session_dir.name})")
+        self.i = 0
 
-    def submit(self, name: str, frame, label_line: str) -> bool:
-        """큐에 넣기만 하고 즉시 돌아온다. 큐가 차면 버리고 False."""
-        try:
-            self.q.put_nowait((name, frame, label_line))
-            return True
-        except queue.Full:
-            # 여기서 기다리면 분리한 의미가 없다. 버리되 반드시 세어서 알린다 —
-            # 큐가 찬다는 건 디스크가 근본적으로 못 따라온다는 뜻이다.
-            self.dropped += 1
-            return False
-
-    def _run(self) -> None:
-        while True:
-            item = self.q.get()
-            if item is None:
-                self.q.task_done()
-                return
-            name, frame, label_line = item
-            try:
-                self.cv2.imwrite(str(self.out_img / f"{name}.jpg"), frame, self.params)
-                (self.out_lbl / f"{name}.txt").write_text(label_line, encoding="utf-8")
-            except Exception as exc:  # noqa: BLE001 - 한 장 실패로 수집을 멈추지 않는다
-                print(f"[saver] {name} 저장 실패: {exc}")
-            finally:
-                self.q.task_done()
+    def read(self):
+        while self.i < len(self.frames):
+            f = self.frames[self.i]
+            self.i += 1
+            img = self.cv2.imread(str(self.dir / f["name"]))
+            if img is not None:
+                return img, f["t"]
+        raise EOFError("녹화본 끝")
 
     def close(self) -> None:
-        """남은 것을 전부 쓰고 스레드를 정리한다."""
-        pending = self.q.qsize()
-        if pending:
-            print(f"  저장 대기 {pending}장 처리 중...")
-        self.q.put(None)
-        self._thread.join(timeout=30.0)
+        pass
 
 
 # ── 검출 ──────────────────────────────────────────────────────────────────
@@ -185,7 +160,7 @@ class BlobFinder:
             if m > 1.0:
                 gray = cv2.convertScaleAbs(gray, alpha=self.ref_mean / m)
         diff = cv2.absdiff(gray, self.ref)
-        _, mask = cv2.threshold(diff, self.a.var_threshold, 255, cv2.THRESH_BINARY)
+        _, mask = cv2.threshold(diff, self.a.diff_threshold, 255, cv2.THRESH_BINARY)
         return mask
 
     def __call__(self, frame):
@@ -194,8 +169,9 @@ class BlobFinder:
         # 열림 -> 점 노이즈 제거, 닫힘 -> 물체 내부 구멍 메우기.
         # 닫힘을 여러 번 하면 작은 물체(2m에서 약 26px)는 형태가 뭉개져 중심이 밀린다.
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel,
-                                iterations=self.a.close_iters)
+        if self.a.close_iters > 0:
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel,
+                                    iterations=self.a.close_iters)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         big = [c for c in contours if self.min_area <= cv2.contourArea(c) <= self.max_area]
@@ -225,6 +201,9 @@ def build_parser() -> argparse.ArgumentParser:
     camlib.add_profile_arg(ap)
     ap.add_argument("--label", default="trash", choices=CLASSES)
     ap.add_argument("--session-note", default="", help="배경/조명 메모 (다양성 추적용)")
+    ap.add_argument("--replay", default=None, metavar="raw/<세션>",
+                    help="카메라 대신 record_raw.py 녹화본을 재생한다. tune_params.py 로 "
+                         "찾은 파라미터를 녹화본 전체에 적용해 라벨을 뽑을 때 쓴다 (PC에서)")
     ap.add_argument("--no-display", dest="display", action="store_false",
                     help="창을 띄우지 않는다. SSH/VNC 로 접속했다면 반드시 붙일 것 — "
                          "X11 로 프레임을 보내는 비용이 프레임률을 10분의 1로 떨어뜨린다")
@@ -235,9 +214,14 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-normalize", dest="normalize", action="store_false",
                    help="밝기 정규화를 끈다 (ref 전용). 정규화가 오히려 해로울 때만")
     g.add_argument("--warmup", type=int, default=60, help="배경 학습 프레임 수")
+    # ⚠ 두 검출기의 임계값은 **단위가 다르다.** 같은 이름을 쓰면 안 된다.
+    #   ref  : 밝기 차이 그 자체 (0~255). "배경보다 25 이상 어둡거나 밝으면 전경"
+    #   mog2 : 그 픽셀의 학습된 분산 대비 마할라노비스 거리의 제곱. 밝기 단위가 아니다
+    g.add_argument("--diff-threshold", type=float, default=25.0,
+                   help="[ref] 배경과 밝기가 이만큼 이상 다르면 전경 (0~255)")
     g.add_argument("--var-threshold", type=float, default=25.0,
-                   help="배경과 이만큼 이상 밝기가 다르면 전경 (0~255)")
-    g.add_argument("--history", type=int, default=300, help="mog2 전용")
+                   help="[mog2] 배경 모델 대비 분산 기준 거리. 밝기 단위가 아니다")
+    g.add_argument("--history", type=int, default=300, help="[mog2] 배경 학습 프레임 수")
 
     g = ap.add_argument_group("블롭 필터")
     g.add_argument("--min-area", type=int, default=80)
@@ -248,7 +232,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--min-fill", type=float, default=0.3, help="bbox 대비 윤곽 채움 비율")
     g.add_argument("--edge-margin", type=int, default=4)
     g.add_argument("--close-iters", type=int, default=1,
-                   help="닫힘 반복. 크면 구멍은 잘 메우지만 작은 물체의 중심이 밀린다")
+                   help="닫힘 반복(0이면 안 함). 크면 구멍은 잘 메우지만 작은 물체의 "
+                        "중심이 밀린다. tune_params.py 로 실측해서 정할 것")
 
     g = ap.add_argument_group("추적·저장")
     g.add_argument("--arm-frames", type=int, default=2,
@@ -269,6 +254,8 @@ def main() -> int:
 
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     session = f"{args.label}_{args.camera}_{stamp}"
+    if args.replay:
+        session += "_replay"
     out_img = ROOT / "images" / session
     out_lbl = ROOT / "labels" / session
     meta_dir = ROOT / "meta"
@@ -276,9 +263,17 @@ def main() -> int:
         d.mkdir(parents=True, exist_ok=True)
     meta_path = meta_dir / f"{session}.json"
 
-    cam = camlib.open_camera(args.camera, exposure_us=args.exposure_us, gain=args.gain,
-                             auto_lock=args.auto_lock_exposure,
-                             max_exposure_us=args.max_exposure_us, max_gain=args.max_gain)
+    if args.replay:
+        cam = ReplaySource(cv2, pathlib.Path(args.replay))
+        args.warmup = cam.n_warmup          # 녹화 때 표시해둔 워밍업 구간을 그대로 쓴다
+        args.display = False                # 수천 장을 창에 뿌릴 이유가 없다
+        print(f"[replay] {cam.spec.name}  프레임 {len(cam.frames)}장 "
+              f"(워밍업 {cam.n_warmup}장)")
+    else:
+        cam = camlib.open_camera(args.camera, exposure_us=args.exposure_us, gain=args.gain,
+                                 auto_lock=args.auto_lock_exposure,
+                                 max_exposure_us=args.max_exposure_us,
+                                 max_gain=args.max_gain)
     frame, _ = cam.read()
     H, W = frame.shape[:2]
     finder = BlobFinder(cv2, args, W * H)
@@ -409,6 +404,8 @@ def main() -> int:
                 fps_t0 = now
                 fps_log.append(fps)
                 print(f"  {fps:5.1f} fps   saved={saved}   최근={why}")
+    except EOFError:
+        print("\n  녹화본 끝까지 재생했다.")
     except KeyboardInterrupt:
         print("\n  Ctrl+C — 중단한다. 저장된 사진은 그대로 남아 있다.")
     finally:
