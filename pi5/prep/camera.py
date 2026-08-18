@@ -72,14 +72,16 @@ SPECS: dict[str, CameraSpec] = {
         name="InnoMaker CAM-IMX296Color-GS + 6mm CS 렌즈",
         width=1456, height=1088, fps=60,
         calib_model="pinhole", exposure_us=2000, gain=9.0,
-        max_exposure_us=2000, max_gain=32.0,   # auto_lock이 그 이상으로 늘리지 못하게
+        max_exposure_us=2000, max_gain=16.0,   # auto_lock이 그 이상으로 늘리지 못하게
                                                 # 상한을 exposure_us와 같이 잡아뒀다.
                                                 # ⚠ 실측으로 확정(2026-08-12, tune_camera.py):
                                                 # exposure_us=2000/gain=9 조합이 밝기(mean≈80,
                                                 # 건강 범위 40~200)와 노이즈 둘 다 괜찮았다.
                                                 # 블러 계산상(2ms×1.5~2m/s≈3~4mm) 여유도 있음.
-                                                # max_gain=32는 그보다 어두운 조명을 만났을 때의
-                                                # 안전 상한으로 남겨둠 — 실제 동작점은 9 근처.
+                                                # ⚠ max_gain은 32까지 실험했다가 노이즈가 너무
+                                                # 심해서(2026-08-18) 16으로 다시 내림. 9(실제
+                                                # 동작점) 대비 여유는 주면서 32 같은 과도한
+                                                # 노이즈 구간엔 안 들어가게 하는 선.
         note="라즈베리파이 공식 GS 카메라와 동일 스펙(제조사가 호환품으로 표기). "
              "Sony IMX296 Color, 1456x1088, 픽셀 3.45µm, 센서 대각 6.3mm(1/2.9\"), "
              "글로벌 셔터, 최대 60fps, C/CS 마운트, 최소 노출 30µs. "
