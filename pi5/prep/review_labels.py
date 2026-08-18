@@ -12,8 +12,18 @@
 판단하기 어려울 때 쓴다 — bbox 주변만 잘라 확대해서 보여준다. `A`로 다시 그리는
 좌표는 자동으로 원본 프레임 기준으로 환산되므로 확대 상태에서도 그대로 쓸 수 있다.
 
+투명 물병처럼 라벨(스티커)만 작게 잡힌 경우, 자동 크롭 범위가 라벨 크기 기준이라
+물병 전체가 화면 밖으로 나가서 크게 다시 그리기 힘들 수 있다 — 이때 `+`/`-`로
+물체를 중심으로 잡은 채 확대/축소 배율을 조절할 것 (전체화면으로 벗어나는 게
+아니라 같은 중심을 유지한 채 보이는 범위만 넓어진다/좁아진다).
+
+⚠ `--apply`로 재검수할 때도 창이 너무 크면(=`--zoom` 없이 원본 해상도 그대로면)
+일부 원격 데스크톱 환경에서 화살표 키가 창 밖(창 관리자)으로 새서 안 먹힐 수
+있다 — 그러면 `--zoom`을 같이 붙이거나, 화살표 대신 `.`/`,`(또는 `l`/`j`)를 쓸 것.
+
 [조작]
-    → / ←      다음 / 이전
+    → / ←      다음 / 이전 (안 먹히면 `.`/`,` 또는 `l`/`j`)
+    +  / -      (--zoom일 때) 물체 중심으로 확대 / 축소
     D          이 프레임 버림 (라벨+이미지 삭제 표시)
     K          유지 (기본값)
     A          bbox 수동 조정 모드 (드래그로 다시 그림)
@@ -93,6 +103,7 @@ def main() -> int:
 
     i = 0
     drag = {"on": False, "p0": None, "p1": None}
+    zoom_state = {"pad_mult": 1.0}   # +/- 로 조절, 물체 중심 유지한 채 확대범위만 바뀜
 
     def on_mouse(event, x, y, flags, _):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -112,7 +123,7 @@ def main() -> int:
         lab = load_label(lbl_p)
 
         if args.zoom:
-            zx0, zy0, zx1, zy1, zscale = _zoom_region(lab, W, H)
+            zx0, zy0, zx1, zy1, zscale = _zoom_region(lab, W, H, pad_frac=0.6 * zoom_state["pad_mult"])
         else:
             zx0, zy0, zx1, zy1, zscale = 0, 0, W, H, 1
         view = img[zy0:zy1, zx0:zx1].copy()
@@ -141,7 +152,7 @@ def main() -> int:
             cv2.rectangle(view, drag["p0"], drag["p1"], (255, 200, 0), 2)
 
         status = "DROP" if str(img_p) in dropped else "keep"
-        zoom_tag = " [ZOOM]" if args.zoom else ""
+        zoom_tag = f" [ZOOM x{zoom_state['pad_mult']:.1f}]" if args.zoom else ""
         cv2.putText(view, f"[{i+1}/{len(items)}] {status}  {img_p.parent.name}{zoom_tag}",
                     (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.imshow("review", view)
@@ -167,6 +178,13 @@ def main() -> int:
             i += 1
         elif key in (81, ord(","), ord("j")):      # ←
             i = max(0, i - 1)
+        elif key in (ord("+"), ord("=")):
+            # 확대 — 물체 중심은 그대로 두고 보이는 범위(패딩)만 줄인다
+            zoom_state["pad_mult"] = max(0.2, zoom_state["pad_mult"] / 1.4)
+        elif key == ord("-"):
+            # 축소 — 물체가 화면 밖으로 나갈 만큼 큰 경우(예: 라벨만 잡힌 투명 물병)
+            # 전체화면으로 점프하는 대신 물체 중심을 유지한 채 범위만 넓힌다
+            zoom_state["pad_mult"] = min(15.0, zoom_state["pad_mult"] * 1.4)
         elif key == ord("s"):
             drop_file.write_text(json.dumps(sorted(dropped), indent=2), encoding="utf-8")
             print(f"  저장: 버림 {len(dropped)}건")
