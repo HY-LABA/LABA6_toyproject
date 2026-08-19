@@ -1,7 +1,7 @@
 """어안 픽셀 -> 핀홀 등가 픽셀 변환.
 
 **렌즈가 좁은 화각(대각 90° 미만)으로 바뀌면 이 파일은 필요 없다.**
-지금 렌즈(번들 ZH3019-14, 대각 약 138°)에서는 **없으면 안 된다.**
+지금 렌즈(번들 ZH3019-14, **실측 대각 108.8°**)에서는 **없으면 안 된다.**
 
 왜 있는가
 ---------
@@ -12,9 +12,13 @@
 
 이게 선형인 이유는 `u = fx·X/Z + cx`, 즉 **r = f·tanθ** 이기 때문이다.
 그런데 화각이 90°를 넘는 어안 렌즈는 이 식을 따르지 않는다 (tanθ가 발산한다).
-번들 ZH3019-14는 **등거리(`r = f·θ`)** 다 — 사양의 D=148°/H=118° 비율이
-4:3 센서의 대각/폭 비 1.25를 0.3% 오차로 재현한다 (등입체각은 2.2% 어긋난다).
-근거: ../docs/physics.md 7.2장
+번들 ZH3019-14는 실측 대각 108.8°로 이 범위에 들어간다. 캘리브레이션 계수로
+계산한 θ_d/θ 는 화면 안에서 0.96~0.99 — **거의 등거리(`r = f·θ`)** 이고
+cv2.fisheye 가 쓰는 모델과 같다.  근거: ../docs/physics.md 7.2장
+
+⚠ 예전에는 사양의 D=148°/H=118° 비율로 등거리를 "확정"했는데, **그 사양 자체가
+  과장이었다** (실측 3.36mm/108.8° vs 표기 2.8mm/148°). 결론은 실측으로 다시
+  확인됐지만 그 논거는 쓰지 말 것.
 
 어안 픽셀을 그대로 넣으면 **관측 자체가 틀려서** 최소제곱이 조용히 잘못된
 거리를 뱉는다. 핀홀 기준 입사각 42°에서 z가 79%, 화면 끝에서 165% 어긋난다.
@@ -80,9 +84,32 @@ def to_pinhole_px(uv, model: str | None = None):
     if config.CAMERA_MODEL == "pinhole":
         return uv                          # 이미 핀홀이면 할 일 없다
 
+    _warn_if_outside_frame(uv)
     if config.CAMERA_DISTORTION is not None:
         return _undistort_cv2(uv)
     return _undistort_analytic(uv, model or "equidistant")
+
+
+_warned_outside = False
+
+
+def _warn_if_outside_frame(uv: np.ndarray) -> None:
+    """프레임 밖 좌표가 들어오면 한 번만 경고한다.
+
+    왜곡 다항식은 **관측된 범위 안에서만** 유효하다. 실측 계수로 θ_d/θ 를 그려보면
+    화면 안(최대 입사각 54.4°)에서는 0.96~0.99로 얌전한데 70°에서 2.13까지 튄다.
+    프레임 밖으로 외삽하면 조용히 엉뚱한 값이 나오므로, 그런 입력이 있으면 알린다.
+    (검출 결과는 항상 프레임 안이라 정상 동작에서는 걸릴 일이 없다.)
+    """
+    global _warned_outside
+    if _warned_outside or uv.size == 0:
+        return
+    w, h = config.CAMERA_RESOLUTION
+    if (uv[:, 0] < 0).any() or (uv[:, 0] > w).any() \
+            or (uv[:, 1] < 0).any() or (uv[:, 1] > h).any():
+        _warned_outside = True
+        print(f"[fisheye] ⚠ 프레임({w}x{h}) 밖 좌표가 들어왔다. 왜곡 모델은 화면 "
+              f"안에서만 유효하다 — 결과를 믿지 말 것.")
 
 
 def _undistort_cv2(uv: np.ndarray) -> np.ndarray:

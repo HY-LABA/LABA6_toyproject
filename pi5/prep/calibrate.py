@@ -3,23 +3,33 @@
     python calibrate.py capture          # 체커보드 촬영
     python calibrate.py solve            # 계산 -> JSON + config.py 스니펫
 
-**이게 `pi5/TODO.md` 의 `CAMERA_FX/FY/CX/CY` 항목을 끝낸다.**
-지금 `config.CAMERA_FX = 755`는 렌즈 사양에서 역산한 값이지 실측이 아니다. CS 마운트는
-백포커스를 나사로 돌려 맞추는 구조라 초점을 맞추는 과정에서 실효 초점거리가
-달라지고, 주점도 화면 정중앙이 아니다. **f가 10% 틀리면 깊이도 10% 틀어진다.**
+**이게 `pi5/TODO.md` 의 `CAMERA_FX/FY/CX/CY` 항목을 끝냈다 (2026-08-19).**
+결과: fx 973, fy 974, cx 657, cy 535, RMS 0.411px (23장). config.py 에 반영돼 있다.
+그 전까지 쓰던 `CAMERA_FX = 755`는 렌즈 표기 사양에서 역산한 값이었는데 **29% 틀렸다** —
+표기 "2.8mm / D=148°"가 과장이고 실측은 3.36mm / 대각 108.8°였다.
+M12는 나사로 돌려 초점을 맞추는 구조라 초점을 다시 잡으면 실효 초점거리가 같이
+바뀐다. 렌즈를 건드렸으면 다시 돌릴 것 — **f가 10% 틀리면 깊이도 10% 틀어진다.**
 `solve`가 실측 f_px에서 렌즈 mm를 역산해주므로 렌즈 각인을 못 읽어도 확정된다.
 
 **카메라가 바뀌어도 코드는 동일하다.** 바뀌는 건 `--camera` 프로파일 하나뿐이고,
 그 안의 `calib_model`이 pinhole/fisheye를 자동으로 고른다 (camera.py 표 참고).
 
 왜 모델 구분이 중요한가:
-  화각이 90°를 넘으면 핀홀(r = f·tanθ)이 발산한다. 번들 렌즈(ZH3019-14)는 우리
-  센서에서 대각 약 138°라 **fisheye로 캘리브레이션해야 하고**, `trajectory.py`의
-  선형 해법도 그대로는 못 쓴다 (uv를 먼저 핀홀 등가로 펴야 한다 — `pi5/fisheye.py`).
-  이 렌즈는 **등거리(r = f·θ)** 이고, 그건 cv2.fisheye가 쓰는 모델과 같다.
-  근거: ../../docs/physics.md 7.2장
+  화각이 90°를 넘으면 핀홀(r = f·tanθ)이 발산한다. 번들 렌즈(ZH3019-14)는 실측
+  대각 108.8°라 **fisheye로 캘리브레이션해야 하고**, `trajectory.py`의 선형
+  해법도 그대로는 못 쓴다 (uv를 먼저 핀홀 등가로 펴야 한다 — `pi5/fisheye.py`).
+  실측 왜곡계수로 계산하면 θ_d/θ 가 화면 안에서 0.96~0.99 — 거의 등거리이고,
+  그건 cv2.fisheye 가 쓰는 모델과 같다.  근거: ../../docs/physics.md 7.2장
 
-체커보드: A4에 인쇄해 평평한 판에 붙인다. 기본값은 9x6 내부 코너, 25mm 격자.
+체커보드: 기본값은 9x6 **내부 코너**(= 10x7 칸), 25mm 격자. calib_target.svg 참조.
+  ⚠ 내부 코너는 검은 칸 4개가 만나는 점이다. 칸 수가 아니다 (칸 수 - 1).
+  ⚠ 보드 **전체**가 화면에 들어와야 한다. 코너가 하나라도 프레임 밖이면 나머지를
+    다 찾았어도 **실패**로 처리된다 — 구석에 "걸치게"가 아니라 "통째로" 넣을 것.
+  ⚠ 매 장 **기울여라(30~45°)**. 정면 사진만으로는 초점거리가 거리와 구분되지 않아
+    f 가 수학적으로 결정되지 않는다. 거리를 바꾸는 건 도움이 되지만 대체가 안 된다.
+  ⚠ 보드는 평평해야 한다. 종이가 1mm만 휘어도 왜곡계수가 틀어진다.
+  ※ --square-mm 은 fx/fy/cx/cy 에 영향이 없다 (격자를 k배 하면 외부 파라미터만
+    k배 되고 내부 파라미터는 불변). 인쇄 배율을 자로 잴 필요 없다.
 **데이터 수집을 막지 않는다** — capture_dataset.py는 초점거리를 쓰지 않는다.
 """
 
@@ -41,9 +51,10 @@ TARGET_SHOTS = 20
 # 센서가 바뀌면 이 값도 바뀐다 — IMX219는 1.12µm, IMX708은 1.4µm.
 DEFAULT_PIXEL_MM = 3.45e-3
 
-# pi5/TODO.md 의 렌즈 후보표 (IMX296 기준)
-# ⚠ 공칭 mm 기준이다. 번들 2.8mm는 사양 화각에서 역산하면 실효 2.604mm(f_px 755)라
-#   아래 표의 812보다 낮게 나온다. 두 값 사이면 정상으로 본다.
+# pi5/TODO.md 의 렌즈 후보표 (IMX296 기준). 공칭 mm -> 이론 f_px.
+# ⚠ 번들 렌즈는 표기 2.8mm 인데 실측 f_px 973 (= 3.36mm) 이 나왔다. 표기와 20%
+#   차이라 아래 표에서 "가장 가까운 렌즈"를 골라도 안 맞는 게 정상이다.
+#   저가 M12 렌즈는 표기를 믿을 수 없다 — 실측값을 쓸 것.
 LENS_TABLE = [(2.8, 812), (4.0, 1159), (6.0, 1739), (8.0, 2319), (12.0, 3478)]
 
 
@@ -142,17 +153,29 @@ def cmd_solve(args) -> int:
     print(f"\n{len(obj_pts)}장 사용, 해상도 {size}, 모델 = {model}")
 
     if model == "fisheye":
-        # cv2.fisheye는 (N,1,3)/(N,1,2) 형태를 요구한다
+        # 플래그 위치가 OpenCV 버전마다 다르다. 4.x 는 cv2.fisheye.CALIB_*,
+        # 5.x 는 최상위 cv2.CALIB_* 로 옮겼다 (fisheye 쪽은 AttributeError).
+        ns = cv2.fisheye if hasattr(cv2.fisheye, "CALIB_FIX_SKEW") else cv2
+        flags = ns.CALIB_RECOMPUTE_EXTRINSIC | ns.CALIB_FIX_SKEW
+
         objf = [o.reshape(-1, 1, 3) for o in obj_pts]
-        imgf = [i.reshape(-1, 1, 2) for i in img_pts]
-        K = np.zeros((3, 3))
-        D = np.zeros((4, 1))
-        flags = (cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
-                 | cv2.fisheye.CALIB_FIX_SKEW)
-        rms, K, D, _, _ = cv2.fisheye.calibrate(
-            objf, imgf, size, K, D, flags=flags,
-            criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6),
-        )
+        # 이미지 점 형태도 버전마다 다르다. 4.x 는 (N,1,2) 를 받지만 5.x 는
+        # (1,N,2) 를 요구하며, 아니면 "Sizes of input arguments do not match"
+        # 로 죽는다. 버전 분기 대신 되는 쪽을 찾는다.
+        last = None
+        for shape in ((-1, 1, 2), (1, -1, 2)):
+            try:
+                rms, K, D, _, _ = cv2.fisheye.calibrate(
+                    objf, [i.reshape(shape) for i in img_pts], size,
+                    np.zeros((3, 3)), np.zeros((4, 1)), flags=flags,
+                    criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+                              100, 1e-6),
+                )
+                break
+            except cv2.error as e:
+                last = e
+        else:
+            raise last
         dist = D.ravel().tolist()
     else:
         rms, K, D, _, _ = cv2.calibrateCamera(obj_pts, img_pts, size, None, None)
