@@ -5,12 +5,15 @@
 "1m 거리에서 카메라가 담는 실제 폭"이고, f_px = 이미지폭_px × 거리 ÷ S.
 
 절차:
-  1. 줄자를 벽에 수평으로 테이프로 붙인다.
-  2. 카메라를 벽에서 정확히 1.000m 띄우고, 줄자와 광축이 평행하게 놓는다
-     (비스듬하면 S가 실제보다 크게 읽혀 f_px가 작게 나온다).
-  3. 라이브 프리뷰로 위치를 맞춘다 — 화면 좌우 끝에 빨간 선을 그려주므로
-     그 선이 걸리는 줄자 눈금 두 개를 읽으면 된다. SPACE로 스냅샷 저장, Q로 종료.
-  4. 읽은 두 눈금의 차이(S, m)를 --width-m 로 다시 실행하면 f_px를 계산해준다.
+  1. 줄자를 벽에 수평으로 테이프로 붙인다 (0점 위치는 상관없다 — 아무 데서나 시작해도 됨).
+  2. 카메라를 벽에서 정확히 1.000m 띄우고, 렌즈가 벽을 똑바로(비스듬하지 않게)
+     정면으로 향하게 놓는다 (비스듬하면 S가 실제보다 크게 읽혀 f_px가 작게 나온다).
+     줄자가 화면 안에 넉넉히 들어오기만 하면, 화면 중앙에 안 와도 된다.
+  3. 라이브 프리뷰를 보며 SPACE로 스냅샷 저장, Q로 종료.
+  4. **저장된 사진을 열어서, 사진의 맨 왼쪽 끝과 맨 오른쪽 끝에 각각 줄자가
+     몇 cm를 가리키는지 읽는다.** (특별한 표시선 없음 — 그냥 사진 가장자리 자체가
+     카메라가 담는 화면의 경계다.) 그 두 숫자의 차이가 S(m).
+  5. S를 --width-m 로 다시 실행하면 f_px를 계산해준다.
 
     python measure_focal_length.py --camera gs               # 1~3단계: 라이브 프리뷰+저장
     python measure_focal_length.py --camera gs --no-display  # SSH 대역폭 부족하면 (TROUBLESHOOTING.md)
@@ -53,12 +56,9 @@ def cmd_live(args) -> int:
             h, w = frame.shape[:2]
             if not args.no_display:
                 view = frame.copy()
-                # 프레임 경계 자체가 기준선이다 — 눈에 잘 띄게 세로선만 덧그린다
-                cv2.line(view, (2, 0), (2, h), (0, 0, 255), 2)
-                cv2.line(view, (w - 3, 0), (w - 3, h), (0, 0, 255), 2)
-                cv2.putText(view, f"saved {n}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8, (0, 255, 0), 2)
-                cv2.imshow("focal length check (red line = frame edge)", view)
+                cv2.putText(view, f"saved {n}  (read tape at LEFT/RIGHT edge of this image)",
+                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.imshow("focal length check (사진 좌우 '끝'의 줄자 눈금을 읽을 것)", view)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     break
@@ -83,7 +83,7 @@ def cmd_live(args) -> int:
             cv2.destroyAllWindows()
 
     print(f"\n{n}장 저장 -> {OUT_DIR}/")
-    print("이미지 좌우 끝(빨간 선 또는 사진 가장자리)에 걸리는 줄자 눈금 두 개를 읽고,")
+    print("저장된 사진을 열어서, 사진 맨 왼쪽 끝 / 맨 오른쪽 끝의 줄자 눈금을 각각 읽고,")
     print("그 차이 S(m)를 --width-m 로 넣어 다시 실행할 것:")
     print("  python measure_focal_length.py --width-m <S>")
     return 0
