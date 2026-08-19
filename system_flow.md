@@ -28,13 +28,13 @@
 |---|---|---|
 | ① 프레임 캡처 (센서 타임스탬프) | `vision.Camera.capture` | ⏳ Picamera2 연동 필요 |
 | ② Hailo YOLO 추론 → 최고 신뢰도 1개 | `vision.detect` | ⏳ `.hef` 학습·변환 후 |
-| ②' bbox 중심 왜곡 보정 (점 하나만) | `vision._undistort` | ✅ 로직 완성, ⏳ 왜곡계수 필요 |
+| ②' bbox 중심 왜곡 보정 (점 하나만) | `vision._undistort` | ✅ 왜곡계수 실측 완료(k4는 팀 확인 대기) |
 | ③ 관측 누적 + 매 프레임 재피팅 | `trajectory.Tracker.add` | ✅ **합성 투척 검증 완료** |
 | ③' 깊이 수렴 판정 | `Tracker._depth_converged` | ✅ |
 | ④ 착지점·남은시간 예측 | `trajectory.predict_landing` | ✅ |
-| ⑤ 오도메트리 수신 (논블로킹) | `communication.try_receive_odometry` | ✅ 로직, ⏳ pyserial 연결 |
+| ⑤ 오도메트리 수신 (논블로킹) | `communication.try_receive_odometry` | ✅ |
 | ⑤' 남은거리÷남은시간 → 목표속도 | `control.to_drive_command` | ✅ |
-| ⑤" 프레임 전송 | `communication.send_command` | ✅ 로직, ⏳ pyserial 연결 |
+| ⑤" 프레임 전송 | `communication.send_command` | ✅ |
 
 **③에서 아직 못 믿으면 그냥 다음 프레임으로 넘어간다.** 관측 부족(`MIN_OBSERVATIONS`),
 시간 스팬 부족(`MIN_TIME_SPAN_S`), 잔차 초과(`MAX_RESIDUAL_PX`), 깊이 미수렴
@@ -90,14 +90,17 @@
 
 | 순위 | 항목 | 없으면 어떻게 되나 |
 |---|---|---|
-| 1 | **카메라 캘리브레이션** (`prep/calibrate.py` 미작성) ⛔ | f가 틀린 만큼 깊이가 그대로 틀어진다 |
-| 2 | **YOLO 학습 + Hailo 변환** ⏳ | 검출 자체가 안 된다 |
+| 1 | **카메라 캘리브레이션** ✅ 실측 완료 (`prep/calibrate.py` 자체는 `seon` 브랜치에만 있고 이 브랜치에는 결과값만 반영됨) | f가 틀린 만큼 깊이가 그대로 틀어진다 |
+| 2 | **YOLO 학습 + Hailo 변환** ⏳ PC용 `.pt` 학습 완료, Hailo `.hef` 변환 미착수 | 검출 자체가 안 된다 |
 | 3 | **`vision.Camera` Picamera2 연동** ⏳ | 프레임을 못 받는다 |
-| 4 | **pyserial 연결** ⏳ | 피코와 통신 불가 |
-| 5 | **모터 실측** (최대속도/가속/정지거리) ⏳ | 부품 미도착 |
+| 4 | **pyserial 연결** ✅ 완료 (`SerialLink`, `teleop_test.py`로 검증) | 피코와 통신 불가 |
+| 5 | **모터 실측** (최대속도/가속/정지거리) ⏳ 모터 교체됨(FIT0186), 이론값 갱신, 실측은 아직 | 실측 전까지 이론값 기준 |
 | 6 | **피코 핀 번호·PID 게인** ⏳ | 부품 미도착 |
 
 ## 5. 성능 목표 — 검출 노이즈가 전부를 좌우한다
+
+> ⚠ 아래 표는 옛 렌즈 스펙(화각 45°×35° 가정) 기준이라 지금 확정된 실제 렌즈(M12 어안,
+> 화각 108.8°)와 안 맞는다 — 재시뮬레이션 필요, 아직 안 돌림 (`algorithm.md` 4장 참고).
 
 합성 검증 결과 (GS 카메라 실제 스펙, z0=2.5m, 150회 중앙값):
 

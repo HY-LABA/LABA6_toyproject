@@ -1,7 +1,8 @@
 # 소프트웨어 아키텍처
 
-> 2026-08-10 개정. 깊이 추정 방식 전환(크기비율 → 중력 기반 궤적 최소제곱)과 파이5↔피코
-> 프로토콜 변경(좌표 → 속도)을 반영했다. 알고리즘 자체는 `algorithm.md` 참고.
+> 2026-08-19 개정. 렌즈가 어안(M12)으로 확정되고 실측 캘리브레이션이 끝났으며, 영상 우선
+> 수집 파이프라인과 오프라인 궤적 검증 도구가 추가됐다. 2026-08-10 개정분(깊이 추정 방식
+> 전환, 파이5↔피코 프로토콜 변경)은 그대로 유효하다. 알고리즘 자체는 `algorithm.md` 참고.
 
 ## 파일 구조
 
@@ -20,18 +21,28 @@ LABA6_toyproject/
 │   ├── vision.py                 # 카메라 캡처 + YOLO → bbox 중심 + 왜곡보정
 │   ├── trajectory.py             # ★ 중력 기반 궤적 최소제곱 + 착지 예측 + Tracker
 │   ├── control.py                # 남은거리÷남은시간 → 목표 속도 (+ 최대속도 클램프)
-│   ├── communication.py          # USB 시리얼 프레임 인코딩/디코딩
+│   ├── communication.py          # USB 시리얼 프레임 인코딩/디코딩 (pyserial 연결 완료)
 │   ├── utils.py                  # 로깅 + 타이밍
+│   ├── teleop_test.py            # Xbox 컨트롤러로 body-frame vx/vy 직접 전송 — 피코 브링업 테스트
+│   ├── predict_trajectory.py     # (신규) CSV(frame,t,u,v) → trajectory.Tracker 재현, 오프라인 궤적 검증 (로컬, 가벼움)
+│   ├── yolo_to_csv.py            # (신규) 영상+YOLO 가중치 → CSV 추출 (Colab용, 무거운 추론만 담당)
 │   ├── TODO.md                   # 실측·연동 필요 항목
 │   └── prep/                     # 학습 데이터 준비 (로봇 구동과 무관, 오프라인)
 │       ├── camera.py             # 카메라 추상화 — 카메라 교체 시 여기만 손댄다
 │       ├── check_setup.py        # 실행 전 환경 점검
-│       ├── capture_dataset.py    # MOG2 자동 검출·라벨링으로 YOLO 데이터셋 수집
-│       ├── review_labels.py      # 자동 라벨 수동 검수 (PC에서)
+│       ├── tune_camera.py        # 노출/게인 라이브 튜닝 (키보드 조작, GUI 슬라이더는 Pi에서 크래시남)
+│       ├── measure_focal_length.py  # 줄자+격자판으로 f_px 실측 (캘리브레이션 이전 약식 확인용)
+│       ├── capture_dataset.py    # MOG2 자동 검출·라벨링으로 YOLO 데이터셋 실시간 수집
+│       ├── capture_video.py      # (신규) 영상만 무처리 녹화 (MJPEG, 촬영 중 버저) — 아래 extract와 짝
+│       ├── extract_from_video.py # (신규) 녹화 영상에서 오프라인 MOG2 추출 + 라벨링 (`--review` 지원)
+│       ├── review_labels.py      # 자동 라벨 수동 검수 — 투척 단위 크롭, `--zoom`/전체화면(F) (PC에서)
 │       ├── prepare_dataset.py    # 세션 단위 train/val/test 분할 + dataset.yaml
 │       ├── train_yolo.py         # YOLOv8n 전이학습 (PC/Colab)
 │       ├── measure_sigma_w.py    # (구) σ_w 측정 — 합격 기준 폐기, 참고용만
 │       └── TROUBLESHOOTING.md    # 실기 작업 기록 — 겪은 문제와 해결
+│
+│   ⚠ `prep/calibrate.py`(체스보드 캘리브레이션, capture+solve)는 아직 `seon` 브랜치에만
+│     있다 — config.py의 실측값은 이걸로 뽑았지만 파일 자체는 이 브랜치에 없다. TODO.md 참고.
 │
 ├── pico/                         # 라즈베리파이 피코 (C, Pico SDK)
 │   ├── main.c                    # 1ms 실시간 제어 루프
@@ -70,12 +81,15 @@ LABA6_toyproject/
 | 파일 | 담당 기능 |
 |---|---|
 | `main.py` | 프레임 단위 루프 하나로 전체를 돌린다: 캡처→검출→관측 누적→재피팅→착지 예측→오도메트리 수신→목표 속도 전송. 물체를 `TRACK_MAX_GAP_S` 이상 놓치면 트랙을 리셋하고 로봇을 세운다. 어떤 경로로 빠져나가도 `finally`에서 정지 명령을 보낸다 |
-| `config.py` | 카메라 내부파라미터(`CAMERA_FX/FY/CX/CY`, 왜곡, 모델), 해상도·fps, YOLO 경로·임계값·단일 클래스, 궤적 파라미터(`MIN_OBSERVATIONS`, `MIN_TIME_SPAN_S`, `MAX_RESIDUAL_PX`, `DEPTH_STABILITY_RATIO`, `Z_RANGE_M`), 로봇 최대속도·워치독·도착 허용오차, 시리얼 설정. **실측으로 정한 값에는 근거 표가 주석으로 붙어 있다** |
-| `vision.py` | ① Picamera2 캡처 (센서 타임스탬프 사용 — 파이썬 수신 시각은 스케줄링 지터가 섞여 궤적 피팅이 그걸 운동으로 읽는다) ② Hailo NPU로 YOLO 추론 ③ 신뢰도 최고 검출 하나의 **bbox 중심**만 취함 ④ `cv2.undistortPoints`로 그 **점 하나만** 왜곡 보정 (프레임 전체를 펴는 건 낭비다). bbox 크기는 로그용으로만 남긴다 |
+| `config.py` | 카메라 내부파라미터(`CAMERA_FX/FY/CX/CY`, 왜곡계수, `CAMERA_MODEL="fisheye"` — **실측 캘리브레이션 완료**), 해상도·fps, YOLO 경로·임계값·단일 클래스, 궤적 파라미터(`MIN_OBSERVATIONS`, `MIN_TIME_SPAN_S`, `MAX_RESIDUAL_PX`, `DEPTH_STABILITY_RATIO`, `Z_RANGE_M`), 로봇 최대속도(모터 FIT0186 기준 재계산)·워치독·도착 허용오차, 시리얼 설정. **실측으로 정한 값에는 근거 표가 주석으로 붙어 있다** |
+| `vision.py` | ① Picamera2 캡처 (센서 타임스탬프 사용 — 파이썬 수신 시각은 스케줄링 지터가 섞여 궤적 피팅이 그걸 운동으로 읽는다) ② Hailo NPU로 YOLO 추론 ③ 신뢰도 최고 검출 하나의 **bbox 중심**만 취함 ④ `_undistort()`가 `config.CAMERA_MODEL`을 보고 `cv2.fisheye.undistortPoints`(어안)/`cv2.undistortPoints`(핀홀) 자동 분기해서 그 **점 하나만** 왜곡 보정 (프레임 전체를 펴는 건 낭비다). bbox 크기는 로그용으로만 남긴다 |
 | `trajectory.py` | ★ 핵심. `fit_trajectory`(2N×6 선형 최소제곱으로 위치·속도 6개 동시 추정), `landing_time`/`predict_landing`(캐치 평면 통과 시각·좌표), `Tracker`(관측 누적 + 매 프레임 재피팅 + **깊이 수렴 판정**). 좌표계 정의도 이 파일 상단에 있다 |
 | `control.py` | 착지점 − 오도메트리 = 남은 거리, 나누기 남은 시간 = 목표 속도. 최대속도 초과 시 **크기만 깎고 방향은 보존**(포화 상태에서는 세 바퀴 속도 비율이 깨져 진행 방향까지 틀어진다). 도착 허용오차 안이면 정지 |
 | `communication.py` | `[START 0xAA][LEN][PAYLOAD][CHECKSUM]` 프레임. 송신 `<fff>`=목표 vx,vy,워치독 / 수신 `<ffffff>`=오도메트리. 수신은 **논블로킹**이고 버퍼에 쌓인 것 중 최신만 쓴다 — 여기서 기다리면 카메라 프레임을 놓치고 그건 곧 관측 손실이다 |
 | `utils.py` | `run.log` append + 콘솔 동시 출력. `log_cycle`이 한 사이클의 판단 근거(관측수, 잔차, 깊이, 착지점, 남은시간, 오도메트리, 명령)를 한 줄로 남긴다 — 예측이 이상할 때 "궤적이 안 맞나(잔차↑) 관측이 부족한가(n↓)"를 로그만으로 구분하기 위함 |
+| `teleop_test.py` | Xbox 컨트롤러 왼쪽 스틱으로 body-frame `target_vx/vy`를 직접 전송. 카메라/YOLO 없이 피코 모터 응답만 먼저 검증할 수 있다. body frame의 실제 +x 방향은 아직 미확정(카메라 장착 방향에 달림) — `--invert-*`/`--swap-xy`로 대응 |
+| `yolo_to_csv.py` | (신규, 오프라인 검증용) 녹화 영상 + YOLO 가중치 → 프레임별 `(frame,t,u,v,conf)` CSV. **무거운 YOLO 추론만 담당**하고 궤적 계산은 안 한다 — Colab에서 돌리는 용도 |
+| `predict_trajectory.py` | (신규, 오프라인 검증용) 그 CSV를 `trajectory.Tracker`에 실시간과 같은 순서로 먹여서 착지 예측 재현. `cv2`/`ultralytics` 불필요(가벼움) — 로컬 PC에서 게이트값(`--min-time-span`/`--depth-ratio`) 바꿔가며 반복 실행하는 용도. `vision._undistort`와 동일한 왜곡보정 로직을 내장 |
 
 ### pi5/prep/ (Python) — 학습 데이터 준비 (오프라인)
 
@@ -83,9 +97,13 @@ LABA6_toyproject/
 |---|---|
 | `camera.py` | **카메라를 바꿀 때 손대는 유일한 파일.** 프로파일(해상도/fps/노출/게인/캘리브레이션 모델)을 `SPECS`에 두고 Picamera2↔OpenCV를 같은 인터페이스로 감싼다. 자동 노출 측정 후 고정(`auto_lock`), 셔터 우선 상한, 노이즈 리덕션 차단(MOG2에 잔상을 남긴다)까지 처리 |
 | `check_setup.py` | 패키지·카메라·디스크 사전 점검. 밝기 진단도 출력 |
-| `capture_dataset.py` | MOG2 배경차분으로 투척 물체를 자동 검출해 **YOLO 라벨(.txt)까지 자동 생성**. 확정 전 프레임을 모아뒀다 확정 시 함께 저장하고, 확정 후에는 `--track-grace`만큼 놓쳐도 추적을 유지한다. `--no-display`(원격 접속 시 필수), 실효 fps 출력 |
-| `review_labels.py` | 자동 라벨을 사람이 검수·수정·기각. **수집은 라파이 헤드리스, 검수는 PC** 분업 |
-| `prepare_dataset.py` | **세션 단위**로 train/val/test 분할 + `dataset.yaml` 생성. 프레임 단위 무작위 분할은 같은 투척이 양쪽에 들어가 검증 점수를 부풀린다 |
+| `tune_camera.py` | 노출/게인 라이브 튜닝. GUI 슬라이더(`cv2.createTrackbar`)가 Pi에서 Qt 크래시가 나서, 키보드(`w/s/e/d` 등)로 조작하는 방식으로 바꿈 |
+| `measure_focal_length.py` | 줄자+벽에 붙인 격자판으로 f_px 약식 실측. 체스보드 캘리브레이션(`prep/calibrate.py`, `seon` 브랜치) 전 대략적인 크로스체크용 |
+| `capture_dataset.py` | MOG2 배경차분으로 투척 물체를 자동 검출해 **YOLO 라벨(.txt)까지 자동 생성**하며 **실시간으로** 수집. 확정 전 프레임을 모아뒀다 확정 시 함께 저장하고, 확정 후에는 `--track-grace`만큼 놓쳐도 추적을 유지한다. `--no-display`(원격 접속 시 필수), 실효 fps 출력 |
+| `capture_video.py` | (신규) **실시간 처리 없이 영상만 녹화** — MOG2를 프레임 캡처 핫루프에서 빼서 병목 제거. MJPEG 기본(Pi5는 HW H.264 인코더 없음), 촬영 중 물체 포착 시 버저(lores 스트림 프레임차 검사) |
+| `extract_from_video.py` | (신규) 녹화된 영상에서 **오프라인으로** MOG2 추출 + 자동 라벨링. `capture_dataset.py`와 같은 `BlobFinder`/상태머신 재사용. `--review`로 저장 전 사람이 bbox 확인 가능, 10% 단위 진행률 출력 |
+| `review_labels.py` | 자동 라벨을 사람이 검수·수정·기각. **투척 단위로 크롭만 모아서 봄** (프레임 단위보다 훨씬 빠름). `--zoom`(확대), `+`/`-`(배율 조절), `F`(전체화면 토글). **수집은 라파이 헤드리스, 검수는 PC** 분업 |
+| `prepare_dataset.py` | **세션 단위**로 train/val/test 분할 + `dataset.yaml` 생성. 프레임 단위 무작위 분할은 같은 투척이 양쪽에 들어가 검증 점수를 부풀린다. `--portable`(Colab 반출용 tar), Windows 경로/인코딩 문제 수정됨 |
 | `train_yolo.py` | YOLOv8n COCO 사전학습에서 전이학습. Colab용 `--project`(Drive 저장)·`--resume` 지원. 크기·회전 증강을 좁게 잡는다 |
 | `measure_sigma_w.py` | (구) bbox 폭 분산 측정. **합격 기준으로서는 폐기** — 깊이 추정이 폭을 더 이상 쓰지 않는다. 검출 흔들림의 간접 지표로만 참고 |
 | `TROUBLESHOOTING.md` | 실기 작업 기록. 형광등 맥동, X11 프레임 드롭, 노이즈 리덕션 잔상, 설계 전환 근거와 실측 표 |
