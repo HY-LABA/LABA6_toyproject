@@ -28,9 +28,41 @@ from __future__ import annotations
 import argparse
 import csv as csv_module
 import math
+import sys
+
+import numpy as np
 
 import config
 import trajectory
+
+# 윈도우 기본 콘솔은 cp949라 "⚠" 같은 문자에 UnicodeEncodeError로 죽는다.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _undistort(u: float, v: float) -> tuple[float, float]:
+    """vision.py의 _undistort()와 동일한 로직 — 실제 로봇 파이프라인과 일치시키려고
+    복붙했다 (vision.py는 utils.py의 로그 파일 부작용이 딸려와서 여기선 import 안 함).
+
+    렌즈 왜곡을 보정해 이상적인 핀홀 좌표로 옮긴다. CAMERA_DISTORTION이 None이면
+    (아직 캘리브레이션 전) 원본 좌표를 그대로 돌려준다.
+    """
+    if config.CAMERA_DISTORTION is None:
+        return u, v
+
+    import cv2
+
+    K = np.array([[config.CAMERA_FX, 0.0, config.CAMERA_CX],
+                  [0.0, config.CAMERA_FY, config.CAMERA_CY],
+                  [0.0, 0.0, 1.0]])
+    d = np.asarray(config.CAMERA_DISTORTION, dtype=float)
+    pts = np.array([[[float(u), float(v)]]], dtype=np.float64)
+
+    if config.CAMERA_MODEL == "fisheye":
+        out = cv2.fisheye.undistortPoints(pts, K, d.reshape(4, 1), P=K)
+    else:
+        out = cv2.undistortPoints(pts, K, d, P=K)
+    return float(out[0, 0, 0]), float(out[0, 0, 1])
 
 
 def main() -> int:
@@ -93,7 +125,8 @@ def main() -> int:
             continue
 
         n_detected += 1
-        u, v = float(row["u"]), float(row["v"])
+        u_raw, v_raw = float(row["u"]), float(row["v"])
+        u, v = _undistort(u_raw, v_raw)
         last_seen_t = t
 
         fit = tracker.add(u, v, t)

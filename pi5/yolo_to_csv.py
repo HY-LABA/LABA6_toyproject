@@ -15,8 +15,13 @@ from __future__ import annotations
 
 import argparse
 import csv as csv_module
+import sys
 
 import cv2
+
+# 윈도우 기본 콘솔은 cp949라 유니코드 문자에 UnicodeEncodeError로 죽는다.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 def main() -> int:
