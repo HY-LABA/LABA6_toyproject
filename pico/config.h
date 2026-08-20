@@ -13,10 +13,18 @@ typedef struct {
     int enc_b;
 } MotorPins;
 
+// 핀 배치 근거:
+//   - RPWM/LPWM은 모터별로 같은 PWM 슬라이스의 A/B 채널에 둔다(짝수/홀수 쌍).
+//     같은 슬라이스 = 같은 주파수, 채널은 듀티 독립 -> motor_control.c 구조에 맞음.
+//   - RP2040은 slice=(gpio>>1)&7, channel=gpio&1 이라 GPIO n과 n+16이 슬라이스·채널까지
+//     겹친다. 아래 배치는 그 충돌을 피한다.
+//   - enc_a/enc_b는 인접할 필요 없음 (encoder_pio.c가 in_pins/jmp_pin을 따로 지정).
+//   - GP0/GP1은 UART 디버그 콘솔용으로 비워둠.
+// 인덱스 = 바퀴 번호 = WHEEL_ANGLES_RAD 인덱스. 드라이버·모터에 물리 라벨을 꼭 붙일 것.
 static const MotorPins MOTOR_PINS[NUM_MOTORS] = {
-    {-1, -1, -1, -1, -1},  // 정해야함
-    {-1, -1, -1, -1, -1},  // 정해야함
-    {-1, -1, -1, -1, -1},  // 정해야함
+    { 2,  3,  6, 10, 11},  // 0: 전방      (b=90도)
+    { 4,  5,  7, 12, 13},  // 1: 후방 좌   (b=210도)
+    { 8,  9, 14, 15, 16},  // 2: 후방 우   (b=330도)
 };
 
 // 파이5 통신: USB CDC (하드웨어 UART 핀 아님)

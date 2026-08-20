@@ -23,7 +23,9 @@ void encoder_init_all(void) {
 
         pio_gpio_init(pio0, pin_a);
         pio_gpio_init(pio0, pin_b);
-        gpio_pull_up(pin_a);  // 정해야함: 실제 모터 방식 확인해야함
+        // 풀업 유지: 오픈드레인 엔코더면 필수이고, 푸시풀이면 내부 ~50k 풀업은
+        // 출력 드라이브에 비해 무시할 수준이라 해가 없다. 양쪽 다 안전한 기본값.
+        gpio_pull_up(pin_a);
         gpio_pull_up(pin_b);
 
         pio_sm_config c = quadrature_1x_program_get_default_config(offset);

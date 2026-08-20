@@ -5,6 +5,10 @@
 
 #define PWM_WRAP 4095
 
+// BTS7960 정격 PWM 상한이 약 25kHz. clkdiv를 안 건드리면 125MHz/4096 = 30.5kHz로
+// 스펙을 넘는다. 125e6 / (1.5259 * 4096) = 20.0kHz -> 가청대역 위, 스펙 안쪽.
+#define PWM_CLKDIV 1.5259f
+
 typedef struct {
     float integral;
     float prev_error;
@@ -15,6 +19,7 @@ static PidState pid_state[NUM_MOTORS];
 static void setup_pwm_pin(int pin) {
     gpio_set_function(pin, GPIO_FUNC_PWM);
     uint slice = pwm_gpio_to_slice_num(pin);
+    pwm_set_clkdiv(slice, PWM_CLKDIV);
     pwm_set_wrap(slice, PWM_WRAP);
     pwm_set_enabled(slice, true);
 }
