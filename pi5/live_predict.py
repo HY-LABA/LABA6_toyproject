@@ -9,25 +9,54 @@
 용도가 아니라 딱 이 과도기용).
 
     python live_predict.py
+    python live_predict.py --save-debug debug_frames
+
+검출될 때마다 confidence/좌표는 콘솔에 실시간으로 찍힌다 (vision.detect가 부르는
+utils.log_detection). 그것만으론 "진짜 쓰레기를 본 건지 오탐인지" 눈으로 확인이
+안 되는데, SSH로 화면을 직접 띄우기는 번거로우니(X11 문제, prep/TROUBLESHOOTING.md
+참고) 대신 --save-debug로 bbox 그린 사진을 저장해서 나중에 scp로 받아 눈으로
+확인하는 방식을 쓴다.
 """
 
 from __future__ import annotations
+
+import argparse
+import pathlib
 
 import config
 import trajectory
 import utils
 
 
-def run() -> None:
+def _save_debug_frame(out_dir: pathlib.Path, frame, det, idx: int) -> None:
+    """검출 프레임에 bbox 그려서 저장 (눈으로 확인용)."""
+    import cv2
+
+    cx, cy, w, h = det.bbox   # 원본 픽셀, 왜곡보정 전 — 실제 찍힌 화면과 맞는 값
+    x1, y1 = int(cx - w / 2), int(cy - h / 2)
+    x2, y2 = int(cx + w / 2), int(cy + h / 2)
+    img = frame.copy()
+    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cv2.putText(img, f"conf={det.confidence:.2f}", (x1, max(0, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_dir / f"{idx:05d}_t{det.t:.3f}.jpg"), img)
+
+
+def run(save_debug: pathlib.Path | None) -> None:
     cam = vision_open()
     tracker = trajectory.Tracker()
     last_seen_t: float | None = None
     n_predictions = 0
+    n_saved = 0
 
     utils.log("live predict 시작 (피코 없음 — 터미널 출력만, main.py 아님)")
+    if save_debug:
+        utils.log(f"검출 프레임을 {save_debug}에 저장한다")
     try:
         while True:
-            det = vision.observe(cam)
+            frame, t = cam.capture()
+            det = vision.detect(frame, t)
 
             # ── 트랙 유지/리셋 판단 (main.py와 동일 로직) ───────────────
             if det is None:
@@ -38,6 +67,10 @@ def run() -> None:
                         tracker.reset()
                         last_seen_t = None
                 continue
+
+            if save_debug:
+                _save_debug_frame(save_debug, frame, det, n_saved)
+                n_saved += 1
 
             last_seen_t = det.t
 
@@ -66,7 +99,7 @@ def run() -> None:
         utils.log("중단됨 (Ctrl+C)")
     finally:
         cam.close()
-        utils.log("live predict 종료")
+        utils.log(f"live predict 종료" + (f" (저장된 사진 {n_saved}장)" if save_debug else ""))
 
 
 def vision_open():
@@ -79,5 +112,17 @@ def vision_open():
     return vision.Camera(config.CAMERA_RESOLUTION, config.CAMERA_FPS)
 
 
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--save-debug", default=None, metavar="DIR",
+                     help="검출될 때마다 bbox 그린 사진을 이 폴더에 저장 (눈으로 확인용). "
+                          "안 주면 저장 안 하고 콘솔 로그만 나온다.")
+    args = ap.parse_args()
+    save_debug = pathlib.Path(args.save_debug) if args.save_debug else None
+    run(save_debug)
+    return 0
+
+
 if __name__ == "__main__":
-    run()
+    raise SystemExit(main())
