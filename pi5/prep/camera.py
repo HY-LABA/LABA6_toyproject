@@ -257,6 +257,30 @@ class Camera:
             raise RuntimeError("프레임 읽기 실패")
         return frame, t
 
+    def read_with_sensor_ts(self) -> tuple[np.ndarray, float]:
+        """(BGR 프레임, 센서 타임스탬프[s]). Picamera2 전용 — 실시간 궤적 피팅(vision.py)이
+        쓴다.
+
+        read()와 다르게 time.monotonic()(파이썬이 프레임을 받은 시각, 스케줄링 지터가
+        섞임) 대신 **SensorTimestamp**(센서가 실제로 노출을 끊은 시각)를 쓴다.
+        capture_request()로 프레임과 메타데이터를 한 번에 받아야 서로 다른 프레임의
+        값이 섞이지 않는다 (capture_array()+capture_metadata()를 따로 부르면 그 사이
+        다음 프레임이 끼어들 수 있다).
+
+        SensorTimestamp의 기준(0점)은 임의(보통 부팅 시각)라 절대값은 의미 없다 —
+        trajectory.py도 차이만 쓰므로 문제없다.
+        """
+        if self._kind != "picamera2":
+            raise RuntimeError("read_with_sensor_ts는 Picamera2 전용이다.")
+        request = self._impl.capture_request()
+        try:
+            frame = request.make_array("main").copy()
+            meta = request.get_metadata()
+        finally:
+            request.release()
+        t = meta["SensorTimestamp"] / 1e9   # ns -> s
+        return frame, t
+
     def capture_lores(self) -> np.ndarray:
         """저해상도 보조 스트림에서 밝기(흑백) 프레임만 뽑는다.
 
