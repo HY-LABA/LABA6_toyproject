@@ -46,6 +46,12 @@ def _save_debug_frame(out_dir: pathlib.Path, frame, det, idx: int) -> None:
 def run(save_debug: pathlib.Path | None) -> None:
     cam = vision_open()
     tracker = trajectory.Tracker()
+
+    if save_debug:
+        # 사진으로 저장되니 콘솔 검출 로그(60fps로 계속 찍혀서 화면 도배함)는
+        # 끈다 — 착지 예측 출력이 묻히지 않게. run.log 파일에는 계속 남는다.
+        utils.set_detection_console_quiet(True)
+
     last_seen_t: float | None = None
     n_predictions = 0
     n_saved = 0

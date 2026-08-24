@@ -25,6 +25,20 @@ def log(message: str) -> None:
     _logger.info(message)
 
 
+_detection_console_quiet = False
+
+
+def set_detection_console_quiet(quiet: bool) -> None:
+    """검출마다 찍히는 log_detection()의 콘솔 출력만 끈다 (파일 run.log에는 계속 남음).
+
+    60fps로 계속 뭔가 잡히면 화면이 그 로그로 다 덮여서 정작 중요한 착지 예측
+    출력을 못 보게 된다 (live_predict.py가 씀). log()/log_cycle() 같은 다른
+    로그(트랙 시작/종료 등)는 그대로 콘솔에 찍힌다 — 이건 검출 로그만 조용히 한다.
+    """
+    global _detection_console_quiet
+    _detection_console_quiet = quiet
+
+
 def log_detection(confidence: float, bbox, uv) -> None:
     """bbox는 왜곡 보정 전 원본, uv는 보정 후 중심.
 
@@ -32,8 +46,13 @@ def log_detection(confidence: float, bbox, uv) -> None:
     "물체가 실제로 작아진 건지 검출이 튄 건지" 구분하는 데 쓸 수 있다.
     """
     cx, cy, w, h = bbox
-    log(f"detect conf={confidence:.2f} center=({cx:.1f},{cy:.1f})->"
-        f"({uv[0]:.1f},{uv[1]:.1f}) size=({w:.1f}x{h:.1f})")
+    msg = (f"detect conf={confidence:.2f} center=({cx:.1f},{cy:.1f})->"
+           f"({uv[0]:.1f},{uv[1]:.1f}) size=({w:.1f}x{h:.1f})")
+    if _detection_console_quiet:
+        _file_handler.emit(_logger.makeRecord(
+            _logger.name, logging.INFO, __file__, 0, msg, None, None))
+    else:
+        log(msg)
 
 
 def log_cycle(fit, landing_xy, time_remaining: float, odom_xy, cmd) -> None:
