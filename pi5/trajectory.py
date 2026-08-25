@@ -204,11 +204,13 @@ class Tracker:
     times: list[float] = field(default_factory=list)
     uvs: list[tuple[float, float]] = field(default_factory=list)
     fit: Fit | None = None
+    _first_shown: bool = field(default=False, repr=False)
 
     def reset(self) -> None:
         self.times.clear()
         self.uvs.clear()
         self.fit = None
+        self._first_shown = False
 
     @property
     def n(self) -> int:
@@ -237,6 +239,18 @@ class Tracker:
         fit = fit_trajectory(self.times, self.uvs)
         if not fit.ok:
             return None
+
+        # 첫 번째로 fit.ok를 통과한 순간만 깊이 수렴 검사를 건너뛰고 바로 내보낸다.
+        # _depth_converged는 구조적으로 n≥6 이상이어야 통과 가능한데(아래 참고),
+        # 초반 깊이는 항상 과소추정 방향으로만 편향된다(errors-in-variables) —
+        # 즉 로봇이 목표보다 덜 가는 쪽으로만 틀리므로 오버슈트 위험이 없고, 다음
+        # 프레임들이 이어서 보정한다. 그래서 "느리지만 확실한 첫 값"보다 "빠르지만
+        # 거친 첫 값"이 낫다고 판단. 두 번째 프레임부터는 다시 엄격하게 검사한다.
+        if not self._first_shown:
+            self._first_shown = True
+            self.fit = fit
+            return fit
+
         if not self._depth_converged(fit):
             return None
         self.fit = fit
