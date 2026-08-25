@@ -9,19 +9,30 @@
 용도가 아니라 딱 이 과도기용).
 
     python live_predict.py
-    python live_predict.py --save-debug debug_frames
 
-검출될 때마다 confidence/좌표는 콘솔에 실시간으로 찍힌다 (vision.detect가 부르는
-utils.log_detection). 그것만으론 "진짜 쓰레기를 본 건지 오탐인지" 눈으로 확인이
-안 되는데, SSH로 화면을 직접 띄우기는 번거로우니(X11 문제, prep/TROUBLESHOOTING.md
-참고) 대신 --save-debug로 bbox 그린 사진을 저장해서 나중에 scp로 받아 눈으로
-확인하는 방식을 쓴다.
+실행할 때마다 live_sessions/session_YYYYMMDD_HHMMSS/ 폴더가 자동으로 생기고,
+그 안에 두 가지가 항상 같이 남는다 (플래그 없이 매번 켜져 있음):
+
+  · recording.mp4    — 시작부터 Ctrl+C까지 실제로 검출에 쓴 프레임 그대로 녹화
+  · debug_frames/     — 검출될 때마다 bbox+confidence 그린 사진 (SSH로 화면을 직접
+                         띄우기 번거로우니(X11 문제, prep/TROUBLESHOOTING.md 참고)
+                         나중에 scp로 받아 눈으로 확인하는 용도)
+
+⚠ recording.mp4는 Picamera2 하드웨어 인코더가 아니라 **검출에 쓴 프레임을 그대로**
+cv2.VideoWriter로 받아쓴다 — 인코더를 따로 붙이면(Picamera2.start_recording) 같은
+스트림에서 capture_array()로 프레임을 읽는 쪽이 막혀버려서 검출/궤적 예측이 통째로
+멈추는 문제가 있었다. 이 방식은 그럴 일이 없고, 오히려 "라이브가 실제로 본 그
+프레임"이 그대로 영상이 되므로 나중에 debug_hef_on_video.py로 재현할 때 더 정확하다.
+
+검출될 때마다 confidence/좌표는 콘솔에도 실시간으로 찍힌다 (vision.detect가 부르는
+utils.log_detection). 다만 사진이 항상 저장되므로 그 60fps짜리 텍스트 로그는
+꺼두고(run.log에는 남음), 착지 예측 결과만 콘솔에 보이게 한다.
 """
 
 from __future__ import annotations
 
-import argparse
 import pathlib
+from datetime import datetime
 
 import config
 import trajectory
@@ -43,25 +54,40 @@ def _save_debug_frame(out_dir: pathlib.Path, frame, det, idx: int) -> None:
     cv2.imwrite(str(out_dir / f"{idx:05d}_t{det.t:.3f}.jpg"), img)
 
 
-def run(save_debug: pathlib.Path | None) -> None:
+def run() -> None:
+    import cv2
+
     cam = vision_open()
     tracker = trajectory.Tracker()
 
-    if save_debug:
-        # 사진으로 저장되니 콘솔 검출 로그(60fps로 계속 찍혀서 화면 도배함)는
-        # 끈다 — 착지 예측 출력이 묻히지 않게. run.log 파일에는 계속 남는다.
-        utils.set_detection_console_quiet(True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_dir = pathlib.Path("live_sessions") / f"session_{stamp}"
+    debug_dir = session_dir / "debug_frames"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    video_path = session_dir / "recording.mp4"
 
+    # 사진이 항상 저장되므로 콘솔 검출 로그(60fps로 계속 찍혀서 화면 도배함)는
+    # 끈다 — 착지 예측 출력이 묻히지 않게. run.log 파일에는 계속 남는다.
+    utils.set_detection_console_quiet(True)
+
+    writer = None  # 첫 프레임이 와야 실제 크기를 알 수 있어 그때 연다
     last_seen_t: float | None = None
     n_predictions = 0
     n_saved = 0
 
-    utils.log("live predict 시작 (피코 없음 — 터미널 출력만, main.py 아님)")
-    if save_debug:
-        utils.log(f"검출 프레임을 {save_debug}에 저장한다")
+    utils.log(f"live predict 시작 (피코 없음 — 터미널 출력만, main.py 아님)  "
+              f"세션: {session_dir}")
     try:
         while True:
             frame, t = cam.capture()
+
+            if writer is None:
+                h, w = frame.shape[:2]
+                writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"),
+                                          config.CAMERA_FPS, (w, h))
+                utils.log(f"영상을 {video_path}에 녹화한다 (Ctrl+C까지 계속)")
+            writer.write(frame)
+
             det = vision.detect(frame, t)
 
             # ── 트랙 유지/리셋 판단 (main.py와 동일 로직) ───────────────
@@ -74,9 +100,8 @@ def run(save_debug: pathlib.Path | None) -> None:
                         last_seen_t = None
                 continue
 
-            if save_debug:
-                _save_debug_frame(save_debug, frame, det, n_saved)
-                n_saved += 1
+            _save_debug_frame(debug_dir, frame, det, n_saved)
+            n_saved += 1
 
             last_seen_t = det.t
 
@@ -104,8 +129,10 @@ def run(save_debug: pathlib.Path | None) -> None:
     except KeyboardInterrupt:
         utils.log("중단됨 (Ctrl+C)")
     finally:
+        if writer is not None:
+            writer.release()
         cam.close()
-        utils.log(f"live predict 종료" + (f" (저장된 사진 {n_saved}장)" if save_debug else ""))
+        utils.log(f"live predict 종료 (세션: {session_dir}, 저장된 사진 {n_saved}장)")
 
 
 def vision_open():
@@ -119,14 +146,7 @@ def vision_open():
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--save-debug", default=None, metavar="DIR",
-                     help="검출될 때마다 bbox 그린 사진을 이 폴더에 저장 (눈으로 확인용). "
-                          "안 주면 저장 안 하고 콘솔 로그만 나온다.")
-    args = ap.parse_args()
-    save_debug = pathlib.Path(args.save_debug) if args.save_debug else None
-    run(save_debug)
+    run()
     return 0
 
 
