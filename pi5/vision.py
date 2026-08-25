@@ -78,17 +78,6 @@ class Camera:
         """(BGR 프레임, 센서 타임스탬프[s])."""
         return self._cam.read_with_sensor_ts()
 
-    def start_recording(self, path: str) -> None:
-        """capture()로 프레임을 뽑으면서 동시에 같은 스트림을 영상으로도 남긴다
-        (live_predict.py --record). want_lores를 안 켰으므로(단일 스트림) 이 영상은
-        live_predict가 실제로 보는 것과 같은 카메라 크롭으로 찍힌다 — capture_video.py
-        (버저 기능 때문에 want_lores=True로 여는 경우가 있음)로 찍은 영상과 달리
-        debug_hef_on_video.py로 재현/비교할 때 믿을 수 있다."""
-        self._cam.start_recording(path, codec="mjpeg")
-
-    def stop_recording(self) -> None:
-        self._cam.stop_recording()
-
     def close(self) -> None:
         self._cam.close()
 

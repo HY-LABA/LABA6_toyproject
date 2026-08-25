@@ -9,29 +9,19 @@
 용도가 아니라 딱 이 과도기용).
 
     python live_predict.py
-    python live_predict.py --save-debug
-    python live_predict.py --no-record
-
-실행할 때마다 live_sessions/session_YYYYMMDD_HHMMSS/ 폴더가 하나 생기고, 그 안에
-전체 실행 구간을 담은 recording.mp4가 기본으로 남는다(--no-record로 끌 수 있음).
---save-debug를 같이 주면 검출될 때마다 bbox 그린 사진도 같은 세션 폴더 안
-debug_frames/에 쌓인다.
+    python live_predict.py --save-debug debug_frames
 
 검출될 때마다 confidence/좌표는 콘솔에 실시간으로 찍힌다 (vision.detect가 부르는
 utils.log_detection). 그것만으론 "진짜 쓰레기를 본 건지 오탐인지" 눈으로 확인이
 안 되는데, SSH로 화면을 직접 띄우기는 번거로우니(X11 문제, prep/TROUBLESHOOTING.md
 참고) 대신 --save-debug로 bbox 그린 사진을 저장해서 나중에 scp로 받아 눈으로
-확인하는 방식을 쓴다. recording.mp4는 그와 별개로 매 프레임 라이브가 실제로 본
-화면 자체를 남긴다 — live_predict.py와 같은 카메라 스트림 설정(단일 스트림)으로
-찍히므로, capture_video.py로 따로 찍은 영상과 달리 debug_hef_on_video.py에 그대로
-넣어서 라이브 결과와 신뢰성 있게 비교할 수 있다.
+확인하는 방식을 쓴다.
 """
 
 from __future__ import annotations
 
 import argparse
 import pathlib
-from datetime import datetime
 
 import config
 import trajectory
@@ -53,19 +43,11 @@ def _save_debug_frame(out_dir: pathlib.Path, frame, det, idx: int) -> None:
     cv2.imwrite(str(out_dir / f"{idx:05d}_t{det.t:.3f}.jpg"), img)
 
 
-def run(save_debug: bool, record: bool) -> None:
+def run(save_debug: pathlib.Path | None) -> None:
     cam = vision_open()
     tracker = trajectory.Tracker()
 
-    # 실행할 때마다 세션 폴더 하나 — 그 안에 녹화 영상 + (있으면) 디버그 사진을
-    # 같이 모아둔다. capture_video.py의 session_YYYYMMDD_HHMMSS 관례와 맞춤.
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    session_dir = pathlib.Path("live_sessions") / f"session_{stamp}"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    debug_dir = session_dir / "debug_frames" if save_debug else None
-    video_path = session_dir / "recording.mp4"
-
-    if debug_dir:
+    if save_debug:
         # 사진으로 저장되니 콘솔 검출 로그(60fps로 계속 찍혀서 화면 도배함)는
         # 끈다 — 착지 예측 출력이 묻히지 않게. run.log 파일에는 계속 남는다.
         utils.set_detection_console_quiet(True)
@@ -74,14 +56,9 @@ def run(save_debug: bool, record: bool) -> None:
     n_predictions = 0
     n_saved = 0
 
-    utils.log(f"live predict 시작 (피코 없음 — 터미널 출력만, main.py 아님)  "
-              f"세션: {session_dir}")
-    if debug_dir:
-        utils.log(f"검출 프레임을 {debug_dir}에 저장한다")
-    if record:
-        cam.start_recording(str(video_path))
-        utils.log(f"영상을 {video_path}에 녹화한다 (Ctrl+C까지 계속)")
-
+    utils.log("live predict 시작 (피코 없음 — 터미널 출력만, main.py 아님)")
+    if save_debug:
+        utils.log(f"검출 프레임을 {save_debug}에 저장한다")
     try:
         while True:
             frame, t = cam.capture()
@@ -97,8 +74,8 @@ def run(save_debug: bool, record: bool) -> None:
                         last_seen_t = None
                 continue
 
-            if debug_dir:
-                _save_debug_frame(debug_dir, frame, det, n_saved)
+            if save_debug:
+                _save_debug_frame(save_debug, frame, det, n_saved)
                 n_saved += 1
 
             last_seen_t = det.t
@@ -127,11 +104,8 @@ def run(save_debug: bool, record: bool) -> None:
     except KeyboardInterrupt:
         utils.log("중단됨 (Ctrl+C)")
     finally:
-        if record:
-            cam.stop_recording()
         cam.close()
-        utils.log(f"live predict 종료 (세션: {session_dir}" +
-                  (f", 저장된 사진 {n_saved}장" if debug_dir else "") + ")")
+        utils.log(f"live predict 종료" + (f" (저장된 사진 {n_saved}장)" if save_debug else ""))
 
 
 def vision_open():
@@ -147,17 +121,12 @@ def vision_open():
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--save-debug", action="store_true",
-                     help="검출될 때마다 bbox 그린 사진을 세션 폴더 안 debug_frames/에 "
-                          "저장한다 (눈으로 확인용). 안 주면 저장 안 하고 콘솔 로그만 나온다.")
-    ap.add_argument("--record", action=argparse.BooleanOptionalAction, default=True,
-                     help="시작부터 Ctrl+C까지 전체 영상을 세션 폴더에 녹화한다 (기본 켜짐, "
-                          "끄려면 --no-record). live_predict가 실제로 쓰는 것과 같은 카메라 "
-                          "스트림 설정(단일 스트림)으로 찍히므로, capture_video.py로 따로 "
-                          "찍은 영상과 달리 debug_hef_on_video.py로 재현/비교할 때 믿을 수 "
-                          "있다.")
+    ap.add_argument("--save-debug", default=None, metavar="DIR",
+                     help="검출될 때마다 bbox 그린 사진을 이 폴더에 저장 (눈으로 확인용). "
+                          "안 주면 저장 안 하고 콘솔 로그만 나온다.")
     args = ap.parse_args()
-    run(save_debug=args.save_debug, record=args.record)
+    save_debug = pathlib.Path(args.save_debug) if args.save_debug else None
+    run(save_debug)
     return 0
 
 
