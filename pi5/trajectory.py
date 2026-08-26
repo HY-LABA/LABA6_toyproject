@@ -1,14 +1,17 @@
-"""단안 포물선 궤적 추정 — **물체 크기를 몰라도 3D를 복원한다.**
+"""단안 포물선 궤적 추정 — **순수 계산만. 상태를 갖지 않는다.**
 
-사진 한 장은 깊이를 담지 못한다. 작은 물체가 가까이 있는 것과 큰 물체가 멀리
-있는 것이 완전히 똑같은 픽셀을 만들기 때문이다. 예전 방식(bbox 크기 ÷ 기준
-크기)은 이 한계를 "물체의 실제 크기를 미리 안다"로 우회했는데, 물체마다 크기를
-등록해야 하고 공중에서 회전하면 보이는 크기가 3배까지 흔들려서 포기했다.
+관측을 누적하고 어느 검출이 이 트랙인지 고르는 일은 `tracker.py`가 한다.
+여기 함수들은 전부 "입력을 주면 답이 나오는" 형태라 하드웨어 없이 테스트된다.
 
-대신 **중력을 자로 쓴다.** 중력은 물체가 뭐든 항상 9.8 m/s²이므로,
-"이 궤적이 9.8의 중력으로 만들어지려면 거리가 얼마여야 하는가"를 역으로 풀면
-스케일이 확정된다. 미지수 6개(t=0 시점의 위치 3 + 속도 3), 관측 하나당 식 2개
-→ 3관측이면 풀리고, 그 이상은 최소제곱으로 노이즈를 눌러준다.
+무엇을 푸는가
+-------------
+사진 한 장은 깊이를 담지 못한다. 작은 물체가 가까이 있는 것과 큰 물체가 멀리 있는
+것이 완전히 똑같은 픽셀을 만들기 때문이다.
+
+**중력을 자로 쓴다.** 중력은 물체가 뭐든 항상 9.8 m/s²이므로, "이 궤적이 9.8의
+중력으로 만들어지려면 거리가 얼마여야 하는가"를 역으로 풀면 스케일이 확정된다.
+미지수 6개(t=0 시점의 위치 3 + 속도 3), 관측 하나당 식 2개 → 3관측이면 풀리고,
+그 이상은 최소제곱이 노이즈를 눌러준다.
 
 왜 *선형* 풀이인가
 ------------------
@@ -24,18 +27,32 @@ X, Y, Z는 미지수에 대해 1차이므로 위 두 식도 [X0,Vx,Y0,Vy,Z0,Vz]�
 
 반복도, 초기추정도, 수렴실패도 없다. 2N×6 최소제곱 한 번이면 끝난다.
 
+★ 카메라가 움직이면 보정해야 한다
+---------------------------------
+카메라가 쓰레기통에 실려 있으므로 **로봇이 출발하는 순간 "카메라 고정" 전제가
+깨진다.** 보정 없이 넣으면 관측에 물체의 운동과 카메라의 운동이 섞여서 포물선이
+성립하지 않는다 — 합성 검증에서 로봇 1.2 m/s일 때 깊이가 참값의 8%로 무너지고
+잔차가 16 px까지 치솟아 `Fit.ok`가 거짓이 됐다.
+
+고치는 법은 우변에 항 하나를 더하는 것뿐이다. X_cam = X_world − camX(t) 이므로
+
+    a·Z − fx·X_world = −fx·camX(t)
+
+좌변 행렬은 그대로고 **미지수의 의미만 카메라 좌표에서 월드 좌표로 바뀐다.**
+`cams`(각 관측 시점의 카메라 월드 위치)를 넘기면 이 보정이 적용된다.
+
 좌표계
 ------
-카메라 원점, 광축(= 카메라가 보는 위쪽)이 +Z. X는 좌우, Y는 앞뒤.
-카메라가 로봇에 실려 있으므로 **착지점 (X,Y)가 곧 로봇이 이동할 거리**다.
-착지 기준면은 `z_catch=0`, 즉 **카메라 모듈이 있는 평면**이다 — 쓰레기통 입구
-높이를 따로 알 필요가 없다.
++Z는 광축(카메라가 보는 위쪽). X는 좌우, Y는 앞뒤.
+`cams`를 넘기면 **월드 좌표계**(트랙 시작 시점의 로봇 중심이 원점)로 풀리고,
+안 넘기면 카메라 좌표계로 풀린다(카메라가 안 움직인다는 가정).
+착지 기준면은 `config.CATCH_HEIGHT_M`.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -44,40 +61,51 @@ import config
 
 @dataclass
 class Fit:
-    """한 번의 최소제곱 결과. p0/v0는 t0 시점의 카메라 좌표계 값."""
+    """한 번의 최소제곱 결과. p0/v0는 t0 시점의 값."""
 
     p0: np.ndarray          # (3,) X0, Y0, Z0
     v0: np.ndarray          # (3,) Vx, Vy, Vz
     t0: float               # 기준 시각(첫 관측의 절대시각)
-    residual_px: float      # 재투영 RMS 오차 — 이 값이 곧 신뢰도다
+    residual_px: float      # 재투영 RMS 오차
     condition: float        # 행렬 조건수 — 시간 스팬이 짧으면 폭발한다
     n: int                  # 사용한 관측 수
 
     @property
     def ok(self) -> bool:
-        """형태가 말이 되는 해인가. **깊이가 정확한가는 여기서 판정하지 못한다** —
-        스케일이 틀린 궤적도 잔차는 작을 수 있기 때문이다(Tracker._depth_converged 참고).
+        """**형태가** 말이 되는 해인가. 검사 네 가지:
+
+          ① 유한성          최소제곱이 발산해 nan/inf 가 나오지 않았나
+          ② Z_RANGE_M       추정 거리가 물리적으로 말이 되나. 정지한 오탐은 "아주
+                            멀리서 따라오는 물체"로 해석돼 z가 수십 m로 튀는데,
+                            이 범위가 그걸 잘라낸다
+          ③ MAX_CONDITION   문제가 잘 풀리는 상태인가. 시간 스팬이 짧거나 궤적이
+                            거의 직선이면 폭발한다
+          ④ MAX_RESIDUAL_PX 추정 궤적을 다시 화면에 투영했을 때 관측과 몇 px
+                            어긋나는가. **이게 탄도 게이트다** — 정지한 점은 어떤
+                            포물선으로도 설명이 안 되므로 잔차가 무한대로 튄다
+
+        ⚠ **깊이가 정확한가는 여기서 판정하지 못한다.** 스케일이 틀린 궤적도 화면에는
+          잘 맞게 투영되기 때문이다 (그건 tracker.Tracker._depth_converged 가 본다).
         """
         lo, hi = config.Z_RANGE_M
         return (
             bool(np.all(np.isfinite(self.p0)))
             and bool(np.all(np.isfinite(self.v0)))
-            and lo <= self.p0[2] <= hi   # 카메라 뒤나 6m 밖은 해가 발산한 것이다
+            and lo <= self.p0[2] <= hi
             and self.condition < config.MAX_CONDITION
             and self.residual_px <= config.MAX_RESIDUAL_PX
         )
 
     def position_at(self, dt: float) -> np.ndarray:
-        """t0로부터 dt초 뒤의 카메라 좌표계 위치."""
-        g = _gravity_cam()
-        return self.p0 + self.v0 * dt + 0.5 * g * dt * dt
+        """t0로부터 dt초 뒤의 위치."""
+        return self.p0 + self.v0 * dt + 0.5 * gravity_cam() * dt * dt
 
     def __repr__(self) -> str:
         return (f"Fit(z={self.p0[2]:.2f}m v={np.round(self.v0, 2)} "
                 f"resid={self.residual_px:.2f}px n={self.n})")
 
 
-def _gravity_cam() -> np.ndarray:
+def gravity_cam() -> np.ndarray:
     """카메라 좌표계에서 본 중력 벡터.
 
     카메라가 정확히 위를 보면 중력은 광축의 반대방향, 즉 (0,0,−g)다.
@@ -87,24 +115,31 @@ def _gravity_cam() -> np.ndarray:
     return np.asarray(config.GRAVITY_CAM, dtype=float)
 
 
-def fit_trajectory(times, uvs) -> Fit:
+def fit_trajectory(times, uvs, cams=None) -> Fit:
     """타임스탬프 붙은 픽셀 관측들로 p0, v0를 푼다.
 
-    `times`는 초 단위이고 차이만 의미가 있다. 내부에서 첫 관측 기준으로 다시
-    맞춘다 — CLOCK_MONOTONIC 원값을 그대로 제곱하면 1e12 규모가 되어 정규방정식의
-    조건수를 망가뜨린다.
+    times : (N,)   초 단위. 차이만 의미가 있다
+    uvs   : (N,2)  왜곡 보정된 픽셀 좌표
+    cams  : (N,2)  각 관측 시점의 **카메라 월드 위치**. None이면 0으로 본다
+                   (= 카메라가 안 움직였다는 가정)
+
+    `times`는 내부에서 첫 관측 기준으로 다시 맞춘다 — CLOCK_MONOTONIC 원값을 그대로
+    제곱하면 1e12 규모가 되어 정규방정식의 조건수를 망가뜨린다.
     """
     t = np.asarray(times, dtype=float)
     uv = np.asarray(uvs, dtype=float)
     if t.ndim != 1 or uv.shape != (t.size, 2):
         raise ValueError(f"times는 (N,), uvs는 (N,2)여야 한다: {t.shape}, {uv.shape}")
+    cm = np.zeros((t.size, 2)) if cams is None else np.asarray(cams, dtype=float)
+    if cm.shape != (t.size, 2):
+        raise ValueError(f"cams는 (N,2)여야 한다: {cm.shape}")
 
     t0 = float(t[0])
     tr = t - t0
     n = t.size
 
     fx, fy = config.CAMERA_FX, config.CAMERA_FY
-    g = _gravity_cam()
+    g = gravity_cam()
     a = uv[:, 0] - config.CAMERA_CX
     b = uv[:, 1] - config.CAMERA_CY
 
@@ -113,41 +148,58 @@ def fit_trajectory(times, uvs) -> Fit:
     rhs = np.zeros(2 * n)
     half_t2 = 0.5 * tr * tr
 
-    # a·Z − fx·X = 0
+    # a·Z − fx·X_world = −fx·camX(t)
     A[0::2, 0] = -fx
     A[0::2, 1] = -fx * tr
     A[0::2, 4] = a
     A[0::2, 5] = a * tr
-    rhs[0::2] = half_t2 * (fx * g[0] - a * g[2])
+    rhs[0::2] = half_t2 * (fx * g[0] - a * g[2]) - fx * cm[:, 0]
 
-    # b·Z − fy·Y = 0
+    # b·Z − fy·Y_world = −fy·camY(t)
     A[1::2, 2] = -fy
     A[1::2, 3] = -fy * tr
     A[1::2, 4] = b
     A[1::2, 5] = b * tr
-    rhs[1::2] = half_t2 * (fy * g[1] - b * g[2])
+    rhs[1::2] = half_t2 * (fy * g[1] - b * g[2]) - fy * cm[:, 1]
 
     sol, _res, _rank, sv = np.linalg.lstsq(A, rhs, rcond=None)
     condition = float(sv[0] / sv[-1]) if sv.size and sv[-1] > 0 else math.inf
 
     p0 = np.array([sol[0], sol[2], sol[4]])
     v0 = np.array([sol[1], sol[3], sol[5]])
-
-    # 오차는 해석 가능한 단위로 보고한다 — 재투영 픽셀.
-    resid = _reprojection_rms(p0, v0, g, tr, uv)
+    resid = reprojection_rms(p0, v0, tr, uv, cm)
     return Fit(p0=p0, v0=v0, t0=t0, residual_px=resid, condition=condition, n=n)
 
 
-def _reprojection_rms(p0, v0, g, tr, uv) -> float:
-    """추정 궤적을 다시 화면에 투영해서 실제 관측과 몇 px 어긋나는지."""
+def reprojection_rms(p0, v0, tr, uv, cams=None) -> float:
+    """추정 궤적을 다시 화면에 투영해서 실제 관측과 몇 px 어긋나는지.
+
+    카메라가 움직였으면 그 시점의 카메라 위치를 빼고 투영해야 맞다.
+    """
+    g = gravity_cam()
+    tr = np.asarray(tr, dtype=float)
+    uv = np.asarray(uv, dtype=float)
+    cm = np.zeros((tr.size, 2)) if cams is None else np.asarray(cams, dtype=float)
     pts = p0[None, :] + v0[None, :] * tr[:, None] + 0.5 * g[None, :] * (tr * tr)[:, None]
     z = pts[:, 2]
     if np.any(z <= 1e-9):
         return math.inf
-    u = config.CAMERA_FX * pts[:, 0] / z + config.CAMERA_CX
-    v = config.CAMERA_FY * pts[:, 1] / z + config.CAMERA_CY
+    u = config.CAMERA_FX * (pts[:, 0] - cm[:, 0]) / z + config.CAMERA_CX
+    v = config.CAMERA_FY * (pts[:, 1] - cm[:, 1]) / z + config.CAMERA_CY
     d = np.stack([u, v], axis=1) - uv
     return float(np.sqrt(np.mean(np.sum(d * d, axis=1))))
+
+
+def project(fit: Fit, t: float, cam_xy=(0.0, 0.0)) -> tuple[float, float] | None:
+    """fit이 예측하는 시각 t의 **화면 좌표**. 카메라 뒤로 가면 None.
+
+    게이팅이 "예측 위치에 가장 가까운 검출"을 고를 때 쓴다.
+    """
+    p = fit.position_at(t - fit.t0)
+    if p[2] <= 1e-6:
+        return None
+    return (config.CAMERA_FX * (p[0] - cam_xy[0]) / p[2] + config.CAMERA_CX,
+            config.CAMERA_FY * (p[1] - cam_xy[1]) / p[2] + config.CAMERA_CY)
 
 
 def landing_time(fit: Fit, z_catch: float = None) -> float | None:
@@ -158,7 +210,7 @@ def landing_time(fit: Fit, z_catch: float = None) -> float | None:
     """
     if z_catch is None:
         z_catch = config.CATCH_HEIGHT_M
-    gz = _gravity_cam()[2]
+    gz = gravity_cam()[2]
     a = 0.5 * gz
     b = fit.v0[2]
     c = fit.p0[2] - z_catch
@@ -177,103 +229,10 @@ def landing_time(fit: Fit, z_catch: float = None) -> float | None:
 def predict_landing(fit: Fit, z_catch: float = None):
     """(착지점 x, y, t0로부터의 남은시간) 또는 None.
 
-    반환하는 x, y는 카메라 원점 기준이고 카메라가 로봇에 실려 있으므로
-    **그대로 로봇이 이동해야 할 거리**다. 별도 좌표 변환이 필요 없다.
+    `cams`를 넣어 푼 fit이면 이 x, y는 **월드 좌표**(트랙 시작 시점의 로봇 중심 기준)다.
     """
     dt = landing_time(fit, z_catch)
     if dt is None:
         return None
     p = fit.position_at(dt)
     return float(p[0]), float(p[1]), float(dt)
-
-
-@dataclass
-class Tracker:
-    """관측을 누적하며 착지 예측을 계속 정밀화한다.
-
-    매 프레임 **처음부터 다시 피팅**한다. 이 규모에선 최소제곱이 마이크로초라
-    아낄 게 없고, 배치 피팅은 물리를 매 프레임 정확히 강제하므로 프로세스 노이즈가
-    포물선을 서서히 밀어내는 일이 없다.
-
-    프레임을 몇 장 모아야 하는가는 **개수가 아니라 시간 스팬**의 문제다. 궤적의
-    처짐량은 ⅛·g·T²이라 T에 제곱으로 붙는 반면, 같은 시간에 프레임만 늘리면
-    노이즈 평균 효과로 √N밖에 못 얻는다. 60fps 연속 3장(T=0.05s)이면 2m 거리에서
-    처짐이 1.2px — 검출 노이즈에 묻힌다. 그래서 MIN_TIME_SPAN_S로 막는다.
-    """
-
-    times: list[float] = field(default_factory=list)
-    uvs: list[tuple[float, float]] = field(default_factory=list)
-    fit: Fit | None = None
-
-    def reset(self) -> None:
-        self.times.clear()
-        self.uvs.clear()
-        self.fit = None
-
-    @property
-    def n(self) -> int:
-        return len(self.times)
-
-    @property
-    def time_span(self) -> float:
-        return (self.times[-1] - self.times[0]) if self.times else 0.0
-
-    def add(self, u: float, v: float, t: float) -> Fit | None:
-        """관측 하나 추가하고 갱신된 fit을 돌려준다. 아직 못 믿으면 None."""
-        self.times.append(float(t))
-        self.uvs.append((float(u), float(v)))
-        if len(self.times) > config.TRACK_WINDOW:
-            del self.times[0]
-            del self.uvs[0]
-
-        self.fit = None
-        if self.n < config.MIN_OBSERVATIONS:
-            return None
-        if self.time_span < config.MIN_TIME_SPAN_S:
-            # 시간 스팬이 짧으면 곡률을 못 재고 깊이가 발산한다.
-            # 자신 있게 틀린 숫자를 주느니 아무것도 안 주는 게 낫다.
-            return None
-
-        fit = fit_trajectory(self.times, self.uvs)
-        if not fit.ok:
-            return None
-        if not self._depth_converged(fit):
-            return None
-        self.fit = fit
-        return fit
-
-    def _depth_converged(self, fit: Fit) -> bool:
-        """앞쪽 관측만으로 다시 풀어서 깊이가 안정됐는지 본다.
-
-        **잔차로는 이 판정을 할 수 없다.** 스케일이 틀린 궤적도 화면에는 잘 맞게
-        투영되기 때문이다 — 그게 단안 카메라의 원래 모호성이고, 중력이 그 모호성을
-        깨주지만 관측 시간이 짧으면 충분히 못 깬다. 합성 검증에서 스팬 0.5초일 때
-        잔차 1.58px(아주 좋음)인데 깊이는 참값의 69%였다.
-
-        관측이 짧을수록 깊이가 **작게** 나오는 계통 편향(errors-in-variables)이
-        있으므로, 관측을 덜 쓴 해와 전부 쓴 해가 가까워졌다면 수렴한 것이다.
-        노이즈 크기를 미리 몰라도 되는 자기 교정식 판정이다.
-        """
-        k = int(len(self.times) * config.DEPTH_CHECK_FRACTION)
-        if k < config.MIN_OBSERVATIONS:
-            return False
-        sub = fit_trajectory(self.times[:k], self.uvs[:k])
-        z_full, z_sub = fit.p0[2], sub.p0[2]
-        if not np.isfinite(z_sub) or z_sub <= 0.0:
-            return False
-        ratio = z_full / z_sub
-        limit = config.DEPTH_STABILITY_RATIO
-        return (1.0 / limit) <= ratio <= limit
-
-    def landing(self):
-        """(x, y, 착지까지 남은 절대시각까지의 초) 또는 None."""
-        if self.fit is None:
-            return None
-        out = predict_landing(self.fit)
-        if out is None:
-            return None
-        x, y, dt_from_t0 = out
-        # 남은 시간은 "마지막 관측 시각" 기준으로 환산해서 준다 —
-        # 호출부는 지금이 몇 시인지로 판단해야 하기 때문.
-        remaining = self.fit.t0 + dt_from_t0 - self.times[-1]
-        return x, y, remaining

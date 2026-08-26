@@ -242,28 +242,43 @@ def _undistort(u: float, v: float) -> tuple[float, float]:
     return float(out[0, 0, 0]), float(out[0, 0, 1])
 
 
-def detect(frame: object, t: float) -> Detection | None:
-    """한 프레임에서 가장 신뢰도 높은 검출 하나. 없으면 None.
+def detect_all(frame: object, t: float) -> list[Detection]:
+    """한 프레임의 **모든** 검출 (신뢰도 임계값 통과분). 신뢰도 내림차순.
 
-    클래스가 하나라 "어느 클래스인가"를 고민할 필요가 없다. 여러 개가 잡히면
-    가장 신뢰도 높은 것만 쓴다 — 한 번에 하나만 던진다는 전제이고, 혹시 오탐이
-    섞여도 궤적 피팅의 잔차 검사에서 걸러진다.
+    ★ 하나만 돌려주면 안 되는 이유:
+      YOLO가 에어컨·공유기·조명을 오탐할 때, 그게 진짜 쓰레기보다 **높은 신뢰도**를
+      받는 경우가 있다. 최고점 하나만 쓰면 그 프레임에서 진짜 물체는 아예 안 보이고,
+      오탐 좌표가 트랙에 섞인다. 합성 검증에서 25프레임 중 2프레임만 오염돼도
+      재투영 잔차가 무한대로 튀어 예측이 통째로 죽었다.
+
+      그래서 후보를 전부 넘긴다. **어느 것이 진짜인지 여기서도 tracker에서도
+      미리 고르지 않는다** — 후보마다 가설을 돌리고 포물선 물리를 만족한 것만
+      채택한다 (`tracker.TrackerPool`).
     """
-    hits = [
-        (bbox, conf) for bbox, conf in _get_yolo().infer(frame)
-        if conf >= config.YOLO_CONF_THRESHOLD
-    ]
-    if not hits:
-        return None
+    out = []
+    for bbox, conf in _get_yolo().infer(frame):
+        if conf < config.YOLO_CONF_THRESHOLD:
+            continue
+        cx_px, cy_px, _w, _h = bbox
+        u, v = _undistort(cx_px, cy_px)
+        out.append(Detection(u=u, v=v, t=t, confidence=conf, bbox=bbox))
+    out.sort(key=lambda d: -d.confidence)
+    if out:
+        best = out[0]
+        utils.log_detection(best.confidence, best.bbox, (best.u, best.v))
+    return out
 
-    bbox, conf = max(hits, key=lambda h: h[1])
-    cx_px, cy_px, w_px, h_px = bbox
-    u, v = _undistort(cx_px, cy_px)
-    utils.log_detection(conf, bbox, (u, v))
-    return Detection(u=u, v=v, t=t, confidence=conf, bbox=bbox)
+
+def detect(frame: object, t: float) -> Detection | None:
+    """가장 신뢰도 높은 검출 하나. **게이팅을 안 쓸 때만** 의미가 있다.
+
+    실제 구동 루프는 `detect_all` + `TrackerPool`을 쓴다. 이 함수는 단독 디버깅용.
+    """
+    hits = detect_all(frame, t)
+    return hits[0] if hits else None
 
 
-def observe(cam: Camera) -> Detection | None:
-    """한 프레임 캡처해서 검출 결과를 돌려준다."""
+def observe(cam: Camera) -> list[Detection]:
+    """한 프레임 캡처해서 **후보 전체**를 돌려준다. (프레임, 시각)도 함께."""
     frame, t = cam.capture()
-    return detect(frame, t)
+    return detect_all(frame, t)
