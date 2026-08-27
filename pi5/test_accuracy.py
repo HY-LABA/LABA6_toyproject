@@ -3,6 +3,7 @@
     python test_accuracy.py                    # 던지면서 실시간 측정 (기본)
     python test_accuracy.py --throws 10        # 10회 하고 종료
     python test_accuracy.py --no-measure       # 정답 입력 안 받고 수렴만 관찰
+    python test_accuracy.py --video            # 검출 박스 그린 영상도 남김
     python test_accuracy.py --replay logs/*.json        # 저장된 관측으로 재실행
     python test_accuracy.py --replay logs/*.json --span 0.25   # 파라미터 바꿔서 재실행
 
@@ -12,8 +13,13 @@
 예측 오차와 제어 오차가 섞여서 "궤적 예측이 얼마나 정확한가"를 분리할 수 없다.
 여기서는 로봇을 세워두고(오도메트리 고정 (0,0)) **예측만** 기록한다.
 
-쓰는 코드는 실제 구동과 완전히 같다 — `vision.detect_all` → `tracker.TrackerPool`
-→ `trajectory.fit_trajectory`. 달라지는 건 피코로 명령을 안 보낸다는 것뿐이다.
+쓰는 코드는 실제 구동과 완전히 같다 — `vision.observe` → `tracker.TrackerPool.step`
+→ (그 안에서) `trajectory.fit_trajectory`. **`main.py`와 같은 함수를 부른다.**
+달라지는 건 피코로 명령을 안 보낸다는 것과 오도메트리가 (0,0)이라는 것뿐이다.
+
+실행하면 맨 위에 **실제로 로드된 모듈 파일 경로**를 찍는다 — 이 파일이
+`trajectory`를 직접 import하지 않아서(`tracker.py`를 거쳐 부른다) 의심스러울 수
+있는데, 그 출력으로 확인하면 된다.
 
 ★ 관측을 전부 저장한다
 ----------------------
@@ -56,6 +62,83 @@ class Det:
     t: float
     confidence: float
     bbox: tuple = (0.0, 0.0, 0.0, 0.0)
+
+
+# ── 검출 과정 영상 녹화 ────────────────────────────────────────────────────
+
+class VideoRecorder:
+    """검출 박스를 그려 영상으로 남긴다. **인코딩은 백그라운드 스레드에서** 한다.
+
+    ⚠ 공짜가 아니다. 라즈베리파이5에는 하드웨어 인코더 가속이 없어서
+    `cv2.VideoWriter`가 CPU를 쓴다. 다만 비용을 **캡처 루프 밖으로** 빼서, 루프는
+    큐에 넣기만 하고 즉시 돌아온다. 큐가 차면 기다리지 않고 **버리고 센다** —
+    측정 중에 프레임을 놓치느니 영상 몇 장을 잃는 게 낫다.
+
+    그래도 부담되면 `--video-scale 0.5`(기본)로 줄여 쓴다. 화소가 1/4이면
+    인코딩 비용도 대략 1/4이다. 검출 박스 위치를 눈으로 확인하는 용도라 충분하다.
+    """
+
+    def __init__(self, path: pathlib.Path, fps: int, scale: float) -> None:
+        import queue
+        import threading
+
+        self.path = path
+        self.fps = fps
+        self.scale = scale
+        self.q: queue.Queue = queue.Queue(maxsize=64)
+        self.dropped = 0
+        self.written = 0
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def submit(self, frame, dets, label: str) -> None:
+        """루프에서 부른다. 큐에 넣기만 하고 바로 돌아온다."""
+        try:
+            self.q.put_nowait((frame, [(d.u, d.v, d.confidence, d.bbox) for d in dets], label))
+        except Exception:
+            self.dropped += 1
+
+    def _run(self) -> None:
+        import cv2
+
+        writer = None
+        while True:
+            item = self.q.get()
+            if item is None:
+                break
+            frame, dets, label = item
+            try:
+                img = cv2.resize(frame, None, fx=self.scale, fy=self.scale) \
+                    if self.scale != 1.0 else frame.copy()
+                for _u, _v, conf, bbox in dets:
+                    cx, cy, w, h = (v * self.scale for v in bbox)
+                    cv2.rectangle(img, (int(cx - w / 2), int(cy - h / 2)),
+                                  (int(cx + w / 2), int(cy + h / 2)), (0, 255, 0), 2)
+                    cv2.putText(img, f"{conf:.2f}", (int(cx - w / 2), int(cy - h / 2) - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                cv2.putText(img, label, (6, 18), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.55, (0, 255, 255), 1)
+                if writer is None:
+                    h0, w0 = img.shape[:2]
+                    writer = cv2.VideoWriter(str(self.path),
+                                             cv2.VideoWriter_fourcc(*"mp4v"),
+                                             self.fps, (w0, h0))
+                writer.write(img)
+                self.written += 1
+            except Exception as exc:  # noqa: BLE001 - 영상 실패로 측정을 멈추지 않는다
+                print(f"[video] {exc}")
+            finally:
+                self.q.task_done()
+        if writer is not None:
+            writer.release()
+
+    def close(self) -> None:
+        self.q.put(None)
+        self._thread.join(timeout=30.0)
+        if self.written:
+            print(f"   영상: {self.path}  ({self.written}프레임"
+                  + (f", 큐가 차서 버린 것 {self.dropped}장" if self.dropped else "") + ")")
 
 
 # ── 한 번의 투척 ───────────────────────────────────────────────────────────
@@ -298,6 +381,20 @@ def save_throw(throw: Throw, path: pathlib.Path) -> None:
 
 def collect_live(args) -> list[Throw]:
     import vision                                   # 여기서 import — PC에서도 --replay는 되게
+    import trajectory
+
+    # ★ **어떤 파일을 실제로 쓰고 있는지 찍는다.**
+    #   test_accuracy.py 는 trajectory를 직접 import하지 않는다 — tracker.py 를 거쳐
+    #   traj.fit_trajectory / predict_landing / project 를 부른다. 눈에 안 보이니
+    #   여기서 경로를 출력해 "내 코드가 맞는지" 의심할 여지를 없앤다.
+    print("사용 중인 모듈:")
+    for m in (config, vision, tracker_mod, trajectory):
+        print(f"   {m.__name__:<12} {m.__file__}")
+    print(f"   모델        {config.YOLO_MODEL_PATH}")
+    print(f"   주요 값     conf>={config.YOLO_CONF_THRESHOLD}  imgsz={config.YOLO_IMGSZ}  "
+          f"스팬>={config.MIN_TIME_SPAN_S}s  잔차<={config.MAX_RESIDUAL_PX}px  "
+          f"수렴비<={config.DEPTH_STABILITY_RATIO}")
+    print()
 
     cam = vision.Camera(config.CAMERA_RESOLUTION, config.CAMERA_FPS)
     throws: list[Throw] = []
@@ -305,6 +402,8 @@ def collect_live(args) -> list[Throw]:
     # 채택 전에는 최근 것만 들고 있는다. Ctrl-C로 끊어도 이 버퍼가 통째로 저장되므로
     # **"계속 탐지만 하고 아무 일도 안 일어날 때" 원인을 오프라인으로 뜯어볼 수 있다.**
     ring = int(config.CAMERA_FPS * args.buffer_s)
+    rec = (VideoRecorder(LOG_DIR / f"{stamp}.mp4", config.CAMERA_FPS, args.video_scale)
+           if args.video else None)
 
     print(f"카메라 열림 {config.CAMERA_RESOLUTION[0]}x{config.CAMERA_RESOLUTION[1]}"
           f"@{config.CAMERA_FPS}. 로봇은 **세워둘 것** (예측 오차만 재는 중).")
@@ -323,10 +422,16 @@ def collect_live(args) -> list[Throw]:
         print(f"── 투척 {throw.index} 대기 중… ──")
         try:
             while True:
-                dets, t = vision.observe(cam)
+                dets, t, frame = vision.observe(cam)     # main.py와 같은 함수
                 track, landing, reason = pool.step(dets, odom, t)
                 if landing is not None:
                     armed = True
+                if rec is not None:
+                    lab = (f"t={t - (throw.frames[0]['t'] if throw.frames else t):6.2f}s  "
+                           f"det={len(dets)}  trk={pool.n_tracks}  {pool.state}")
+                    if landing is not None:
+                        lab += f"  -> 착지({landing[0] * 100:+.0f},{landing[1] * 100:+.0f})cm"
+                    rec.submit(frame, dets, lab)
 
                 throw.record_frame(t, dets)
                 if not armed and len(throw.frames) > ring:
@@ -363,7 +468,7 @@ def collect_live(args) -> list[Throw]:
 
         run_throw(throw)                             # 저장된 프레임으로 다시 풀어 일관성 확보
         print_throw(throw)
-        if not args.no_measure and throw.preds and not interrupted:
+        if not args.no_measure and throw.preds:
             try:
                 ask_ground_truth(throw)
             except (EOFError, KeyboardInterrupt):
@@ -374,6 +479,8 @@ def collect_live(args) -> list[Throw]:
         throws.append(throw)
 
     cam.close()
+    if rec is not None:
+        rec.close()
     return throws
 
 
@@ -404,6 +511,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="궤적 예측 정확도 측정 (로봇 정지 상태)")
     ap.add_argument("--throws", type=int, default=None, help="이 횟수만큼 하고 종료")
     ap.add_argument("--no-measure", action="store_true", help="정답 입력 안 받음")
+    ap.add_argument("--video", action="store_true",
+                    help="검출 박스를 그린 영상을 남긴다. 인코딩은 백그라운드 스레드라 "
+                         "루프는 거의 안 느려지지만, CPU를 쓰므로 fps가 조금 떨어질 수 있다")
+    ap.add_argument("--video-scale", type=float, default=0.5,
+                    help="영상 축소 배율. 0.5면 화소 1/4 = 인코딩 비용 약 1/4 (기본 0.5)")
     ap.add_argument("--buffer-s", type=float, default=10.0,
                     help="투척 감지 전에 들고 있을 프레임 길이(초). Ctrl-C로 끊으면 이만큼 저장된다")
     ap.add_argument("--replay", nargs="+", metavar="JSON", help="저장된 관측으로 재실행")

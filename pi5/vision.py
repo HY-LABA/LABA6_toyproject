@@ -296,12 +296,17 @@ def detect(frame: object, t: float) -> Detection | None:
     return hits[0] if hits else None
 
 
-def observe(cam: Camera) -> tuple[list[Detection], float]:
-    """한 프레임 캡처해서 **(후보 전체, 캡처 시각)** 을 돌려준다.
+def observe(cam: Camera) -> tuple[list[Detection], float, "np.ndarray"]:
+    """한 프레임 캡처해서 **(후보 전체, 캡처 시각, 원본 프레임)** 을 돌려준다.
 
     시각을 함께 주는 이유: 호출부가 `time.monotonic()`을 따로 부르면 캡처 시각과
     수십 ms 어긋난다. 그 값이 궤적 투영(`project`)의 t로 들어가면 예측 위치가
     밀려서 연관이 빗나간다. **피팅에 쓰는 시각과 루프가 쓰는 시각은 같아야 한다.**
+
+    프레임도 돌려주는 이유: `test_accuracy.py --video`가 검출 박스를 그려 영상으로
+    남긴다. 이것 때문에 캡처+검출을 따로 부르게 하면 **구동 루프와 테스트 루프가
+    갈라진다** — 그러면 테스트가 실제와 같다는 보장이 깨진다. 구동 쪽은 프레임을
+    그냥 무시하면 되므로 비용이 없다(복사 안 한다).
     """
     frame, t = cam.capture()
-    return detect_all(frame, t), t
+    return detect_all(frame, t), t, frame

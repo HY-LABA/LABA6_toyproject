@@ -51,7 +51,7 @@ def run() -> None:
         while True:
             # ── ① 캡처 + 검출 (후보 전체) ────────────────────────────────
             #    시각은 캡처 시점 것을 쓴다 — 피팅 입력과 같은 시계여야 한다.
-            candidates, now = vision.observe(cam)
+            candidates, now, _frame = vision.observe(cam)
 
             # ── 오도메트리 갱신 (논블로킹) ───────────────────────────────
             odom = link.try_receive_odometry()
