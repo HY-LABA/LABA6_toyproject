@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 # ─────────────────────────────────────────────────────────────────────────
 # 카메라 — InnoMaker CAM-IMX296Color-GS + **번들 M12 2.8mm F2.2 어안**
 # ─────────────────────────────────────────────────────────────────────────
@@ -77,7 +79,25 @@ CAMERA_DISTORTION: tuple[float, ...] | None = (-0.1432, 0.0282, -0.0445, 0.288)
 # ─────────────────────────────────────────────────────────────────────────
 # YOLO — 단일 클래스
 # ─────────────────────────────────────────────────────────────────────────
-YOLO_MODEL_PATH: str | None = None  # 정해야함: 학습 후 .hef 경로
+# 학습·변환된 Hailo 모델(.hef)의 위치. **저장소 루트 기준 상대경로**라 클론 위치가
+# 달라도(파이 홈이든 PC든) 그대로 동작한다.
+#
+# **이 파일은 git에 안 들어간다** (`.gitignore`의 `*.hef` — 용량이 크고 코드가 아니다).
+# 그래서 브랜치를 바꿔도 따라오지 않고 `git checkout`으로 가져올 수도 없다. 팀원이
+# 변환한 걸 쓰려면 **파일을 직접 복사**해야 한다:
+#
+#     scp best.hef pi@<파이IP>:~/LABA6_toyproject/best_hailo_model/
+#
+# 반대로 gitignore 대상이라 **브랜치를 바꿔도 지워지지 않는다** — 한 번 받아두면
+# 어느 브랜치에서든 그대로 쓸 수 있다.
+#
+# 환경변수 TRASH_HEF 로 덮어쓸 수 있다 (여러 모델을 비교할 때 편하다):
+#     TRASH_HEF=~/models/v2.hef python main.py
+#
+# ⚠ **이 .hef 를 컴파일할 때 쓴 imgsz 가 아래 YOLO_IMGSZ 와 같아야 한다.**
+#   다르면 변환도 되고 추론도 되는데 정확도만 조용히 떨어진다.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+YOLO_MODEL_PATH: str = str(_REPO_ROOT / "best_hailo_model" / "best.hef")
 YOLO_CONF_THRESHOLD = 0.5
 
 # 추론 입력 크기. **학습에 쓴 값과 반드시 같아야 한다** (prep/train_yolo.py --imgsz).

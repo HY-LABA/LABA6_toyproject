@@ -205,12 +205,29 @@ class _HailoYolo:
 _yolo: _HailoYolo | None = None
 
 
+def _model_path() -> str:
+    """쓸 .hef 경로. 환경변수 TRASH_HEF 가 있으면 그게 이긴다."""
+    import os
+
+    return os.environ.get("TRASH_HEF") or config.YOLO_MODEL_PATH
+
+
 def _get_yolo() -> _HailoYolo:
     global _yolo
     if _yolo is None:
-        if config.YOLO_MODEL_PATH is None:
-            raise NotImplementedError("정해야함: config.YOLO_MODEL_PATH")
-        _yolo = _HailoYolo(config.YOLO_MODEL_PATH)
+        import pathlib as _pl
+
+        path = _pl.Path(_model_path()).expanduser()
+        if not path.is_file():
+            # .hef 는 git에 안 들어가므로(용량) **브랜치를 받아도 안 따라온다.**
+            # 여기서 헤매지 않게 어디서 구하는지까지 적어둔다.
+            raise FileNotFoundError(
+                f"Hailo 모델을 못 찾았다: {path}\n"
+                f"  .hef 는 .gitignore 대상이라 git으로 안 따라온다. 직접 복사해야 한다:\n"
+                f"    1) 파이에 이미 있는지: find ~ -name '*.hef'\n"
+                f"    2) 팀원 PC에서:      scp best.hef pi@<파이IP>:{path.parent}/\n"
+                f"  다른 파일을 쓰려면: TRASH_HEF=/경로/모델.hef python main.py")
+        _yolo = _HailoYolo(str(path))
     return _yolo
 
 
