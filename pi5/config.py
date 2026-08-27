@@ -86,7 +86,8 @@ CAMERA_DISTORTION: tuple[float, ...] | None = (-0.134242, 0.028202, -0.044533, 0
 # ─────────────────────────────────────────────────────────────────────────
 # YOLO — 단일 클래스
 # ─────────────────────────────────────────────────────────────────────────
-YOLO_MODEL_PATH: str | None = None  # 정해야함: 학습 후 .hef 경로
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+YOLO_MODEL_PATH: str = str(_REPO_ROOT / "best_hailo_model" / "best.hef")
 YOLO_CONF_THRESHOLD = 0.5
 
 # 추론 입력 크기. **학습에 쓴 값과 반드시 같아야 한다** (prep/train_yolo.py --imgsz).
