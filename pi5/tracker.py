@@ -338,6 +338,25 @@ class TrackerPool:
         """채택된 가설. `update()`가 이미 정해뒀다."""
         return self.committed
 
+    # ── 한 프레임 전체 ────────────────────────────────────────────────────
+    def step(self, detections, odom_xy, now: float):
+        """한 프레임을 처리한다. → `(채택된 가설, 착지예측, 사이클 종료사유)`
+
+        ★ **`main.py`와 `test_accuracy.py`가 이 함수 하나를 공유한다.**
+        각자 루프를 따로 쓰면 한쪽만 고쳤을 때 테스트가 조용히 다른 걸 재게 된다.
+        여기에 모아두면 그럴 수가 없다.
+
+        착지예측은 `(x, y, 남은시간)` 또는 None. 종료사유는 문자열 또는 None —
+        호출부가 `reset()`을 부를지 정한다(테스트는 로그만 남기고, 구동 루프는
+        피코에 STOP도 보낸다).
+        """
+        self.tick(now)
+        self.update(detections, odom_xy, now)
+        track = self.best()
+        landing = track.landing() if track is not None else None
+        remaining = landing[2] if landing is not None else None
+        return track, landing, self.cycle_end_reason(now, remaining)
+
     # ── 조회 ──────────────────────────────────────────────────────────────
     def moved_since_start(self, odom_xy) -> tuple[float, float]:
         """채택한 가설 기준 로봇 이동량. 채택 전이면 (0,0)."""

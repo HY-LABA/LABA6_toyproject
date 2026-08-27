@@ -45,10 +45,11 @@ class Camera:
     """Picamera2 래퍼. prep/camera.py를 그대로 재사용한다 — 노출/게인/auto_lock/
     노이즈리덕션 설정이 전부 거기 있고, 카메라를 바꿔도 여긴 안 건드려도 된다.
 
-    타임스탬프가 궤적 피팅의 입력이라 정확도가 중요하다. 파이썬이 버퍼를 받은
-    시각(time.monotonic)에는 스케줄링 지터가 섞여 있고, 피팅은 그 지터를 물체의
-    운동으로 읽는다. 그래서 **센서 타임스탬프**를 쓴다 (`prep/camera.py`의
-    `read_with_sensor_ts()`).
+    ⚠ **타임스탬프는 아직 개선 여지가 있다.** 지금은 파이썬이 버퍼를 받은 시각
+    (`time.monotonic()`)을 쓰는데, 여기엔 스케줄링 지터가 섞여 있고 피팅은 그 지터를
+    물체의 운동으로 읽는다. picamera2 메타데이터의 `SensorTimestamp`를 쓰면 줄일 수
+    있다 — 다만 실기에서 두 시계의 기준(CLOCK_MONOTONIC vs CLOCK_BOOTTIME)이 맞는지
+    확인한 뒤에 바꿔야 한다. 정확도가 기대만큼 안 나오면 여기를 의심할 것.
     """
 
     def __init__(self, resolution: tuple[int, int], fps: int) -> None:
@@ -75,8 +76,8 @@ class Camera:
         self._cam = camlib.open_camera(profile=profile, backend="picamera2")
 
     def capture(self) -> tuple[np.ndarray, float]:
-        """(BGR 프레임, 센서 타임스탬프[s])."""
-        return self._cam.read_with_sensor_ts()
+        """(BGR 프레임, 캡처 시각[s]). 시각은 `time.monotonic()` 기준."""
+        return self._cam.read()
 
     def close(self) -> None:
         self._cam.close()
@@ -278,7 +279,12 @@ def detect(frame: object, t: float) -> Detection | None:
     return hits[0] if hits else None
 
 
-def observe(cam: Camera) -> list[Detection]:
-    """한 프레임 캡처해서 **후보 전체**를 돌려준다. (프레임, 시각)도 함께."""
+def observe(cam: Camera) -> tuple[list[Detection], float]:
+    """한 프레임 캡처해서 **(후보 전체, 캡처 시각)** 을 돌려준다.
+
+    시각을 함께 주는 이유: 호출부가 `time.monotonic()`을 따로 부르면 캡처 시각과
+    수십 ms 어긋난다. 그 값이 궤적 투영(`project`)의 t로 들어가면 예측 위치가
+    밀려서 연관이 빗나간다. **피팅에 쓰는 시각과 루프가 쓰는 시각은 같아야 한다.**
+    """
     frame, t = cam.capture()
-    return detect_all(frame, t)
+    return detect_all(frame, t), t

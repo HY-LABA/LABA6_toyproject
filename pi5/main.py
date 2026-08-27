@@ -49,25 +49,18 @@ def run() -> None:
     utils.log("catch loop start")
     try:
         while True:
-            now = utils.timestamp()
-            pool.tick(now)                          # COOLDOWN 만료 → IDLE
-
             # ── ① 캡처 + 검출 (후보 전체) ────────────────────────────────
-            candidates = vision.observe(cam)
+            #    시각은 캡처 시점 것을 쓴다 — 피팅 입력과 같은 시계여야 한다.
+            candidates, now = vision.observe(cam)
 
             # ── 오도메트리 갱신 (논블로킹) ───────────────────────────────
             odom = link.try_receive_odometry()
             if odom is not None:
                 odom_xy = odom.xy
 
-            # ── ② 후보마다 가설 갱신/스폰 ───────────────────────────────
-            pool.update(candidates, odom_xy, now)
-
-            # ── ③ 물리를 통과한 가설 채택 ───────────────────────────────
-            track = pool.best()
-
-            # ── ④ 예측 ──────────────────────────────────────────────────
-            landing = track.landing() if track is not None else None
+            # ── ②③④ 가설 갱신 → 채택 → 예측 ──────────────────────────
+            #    test_accuracy.py가 **이 함수를 그대로 쓴다.**
+            track, landing, reason = pool.step(candidates, odom_xy, now)
 
             if landing is not None:
                 landing_x, landing_y, time_remaining = landing
@@ -82,11 +75,8 @@ def run() -> None:
                 commanded = True
                 utils.log_cycle(track.fit, (landing_x, landing_y), time_remaining,
                                 odom_xy, cmd)
-            else:
-                time_remaining = None
 
             # ── ⑥ 사이클 종료 ───────────────────────────────────────────
-            reason = pool.cycle_end_reason(now, time_remaining)
             if reason:
                 utils.log(f"cycle end — {reason} (관측 {pool.n}, "
                           f"스팬 {pool.time_span:.2f}s, 가설 {pool.n_tracks}개)")
