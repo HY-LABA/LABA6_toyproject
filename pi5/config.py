@@ -11,6 +11,7 @@
 """
 
 from __future__ import annotations
+import pathlib
 
 # ─────────────────────────────────────────────────────────────────────────
 # 카메라 — InnoMaker CAM-IMX296Color-GS + **번들 M12 2.8mm F2.2 어안**
