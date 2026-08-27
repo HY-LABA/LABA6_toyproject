@@ -182,13 +182,39 @@ def _diagnose(throw: Throw) -> None:
         print("   → YOLO가 아무것도 못 찾았다. 조명·노출·YOLO_CONF_THRESHOLD를 볼 것.")
         return
     span = throw.frames[-1]["t"] - throw.frames[0]["t"] if throw.frames else 0.0
-    print(f"   프레임 전체 시간 스팬 {span:.2f}s (MIN_TIME_SPAN_S={config.MIN_TIME_SPAN_S})")
-    if span < config.MIN_TIME_SPAN_S:
+    fps = len(throw.frames) / span if span > 0 else 0.0
+    print(f"   프레임 스팬 {span:.2f}s, 실측 {fps:.1f}fps "
+          f"(MIN_TIME_SPAN_S={config.MIN_TIME_SPAN_S})")
+
+    # ★ 검출이 움직였는가 — 지금 가장 흔한 실패 원인이 "정적 오탐만 봤다"이다.
+    spots: list[list] = []
+    for f in throw.frames:
+        for d in f["dets"]:
+            for s in spots:
+                if math.hypot(d["u"] - s[0], d["v"] - s[1]) <= 40:
+                    s[2] += 1
+                    break
+            else:
+                spots.append([d["u"], d["v"], 1])
+    moving = sum(1 for s in spots if s[2] <= 3)
+    print(f"   검출 위치 군집 {len(spots)}개 "
+          f"(고정 {len(spots) - moving}개, 스쳐간 것 {moving}개)")
+
+    if moving == 0:
+        print("   → **움직이는 검출이 하나도 없다.** 전부 같은 자리에 계속 나타나는")
+        print("      정적 오탐(에어컨·조명·공유기)이다. 던진 물체가 YOLO에 안 잡혔다는 뜻.")
+        print("      확인할 것: 물체가 화면 안에 들어왔는지, 노출/모션블러, YOLO_CONF_THRESHOLD,")
+        print("      그리고 .hef 의 imgsz 가 config.YOLO_IMGSZ 와 같은지.")
+    elif span < config.MIN_TIME_SPAN_S:
         print("   → 물체가 화면에 있던 시간이 최소 스팬보다 짧다. 더 높이 던지거나 "
               "MIN_TIME_SPAN_S를 낮출 것.")
+    elif fps < config.CAMERA_FPS * 0.5:
+        print(f"   → **프레임레이트가 설정({config.CAMERA_FPS})의 절반도 안 된다.** "
+              f"YOLO 추론이 느려 관측이 성기다. 이러면 궤적을 못 푼다.")
     else:
-        print("   → 스팬은 충분하다. 검출이 끊겨(TRACK_MAX_GAP_S 초과) 가설이 죽었거나, "
-              "fit.ok(잔차·조건수·깊이범위)를 못 넘었을 가능성이 크다.")
+        print("   → 움직이는 검출은 있었다. 중간에 끊겨(TRACK_MAX_GAP_S "
+              f"{config.TRACK_MAX_GAP_S}s 초과) 가설이 죽었거나, fit.ok(잔차·조건수·"
+              "깊이범위)를 못 넘었을 가능성이 크다. --span 을 낮춰 리플레이해볼 것.")
 
 
 def print_summary(throws: list[Throw]) -> None:
@@ -263,56 +289,91 @@ def ask_ground_truth(throw: Throw) -> None:
 
 # ── 실시간 수집 ────────────────────────────────────────────────────────────
 
+def save_throw(throw: Throw, path: pathlib.Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(throw.to_json(), indent=1, ensure_ascii=False),
+                    encoding="utf-8")
+    print(f"   저장: {path}")
+
+
 def collect_live(args) -> list[Throw]:
     import vision                                   # 여기서 import — PC에서도 --replay는 되게
 
     cam = vision.Camera(config.CAMERA_RESOLUTION, config.CAMERA_FPS)
     throws: list[Throw] = []
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
+    # 채택 전에는 최근 것만 들고 있는다. Ctrl-C로 끊어도 이 버퍼가 통째로 저장되므로
+    # **"계속 탐지만 하고 아무 일도 안 일어날 때" 원인을 오프라인으로 뜯어볼 수 있다.**
+    ring = int(config.CAMERA_FPS * args.buffer_s)
 
     print(f"카메라 열림 {config.CAMERA_RESOLUTION[0]}x{config.CAMERA_RESOLUTION[1]}"
           f"@{config.CAMERA_FPS}. 로봇은 **세워둘 것** (예측 오차만 재는 중).")
-    print("던지면 자동으로 감지해서 기록한다. Ctrl-C로 종료.\n")
+    print(f"던지면 자동으로 감지한다. Ctrl-C로 끊으면 **직전 {args.buffer_s:.0f}초가 저장**된다.\n")
 
-    try:
-        while args.throws is None or len(throws) < args.throws:
-            throw = Throw(len(throws) + 1)
-            pool = tracker_mod.TrackerPool()
-            odom = (0.0, 0.0)
-            armed = False                            # 물체를 실제로 잡기 시작했나
+    interrupted = False
+    while not interrupted and (args.throws is None or len(throws) < args.throws):
+        throw = Throw(len(throws) + 1)
+        pool = tracker_mod.TrackerPool()
+        odom = (0.0, 0.0)
+        armed = False
+        t_status = 0.0
+        n_frames = 0
+        t_first = None
 
-            print(f"── 투척 {throw.index} 대기 중… ──")
+        print(f"── 투척 {throw.index} 대기 중… ──")
+        try:
             while True:
                 dets, t = vision.observe(cam)
-                _track, landing, reason = pool.step(dets, odom, t)
+                track, landing, reason = pool.step(dets, odom, t)
                 if landing is not None:
                     armed = True
 
-                # 채택 전 프레임도 들고 있어야 리플레이가 같은 결과를 낸다.
-                # 다만 대기가 길어지면 무한정 쌓이므로 채택 전에는 최근 것만 남긴다.
                 throw.record_frame(t, dets)
-                if not armed and len(throw.frames) > config.TRACK_WINDOW * 3:
+                if not armed and len(throw.frames) > ring:
                     throw.frames.pop(0)
+
+                # ── 상태 표시 — 뭐가 되고 있는지 보여야 원인을 안다 ──────
+                n_frames += 1
+                if t_first is None:
+                    t_first = t
+                if t - t_status > 0.5:
+                    t_status = t
+                    fps = n_frames / max(t - t_first, 1e-6)
+                    top = max((d.confidence for d in dets), default=0.0)
+                    if armed and track is not None and track.fit is not None:
+                        msg = (f"[추적] 관측 {track.n:3d}  스팬 {track.time_span:.2f}s  "
+                               f"깊이 {track.fit.p0[2]:.2f}m  잔차 {track.fit.residual_px:.2f}px")
+                    else:
+                        msg = (f"[대기] {fps:4.1f}fps  검출 {len(dets)}개(최고 {top:.2f})  "
+                               f"가설 {pool.n_tracks}개  {pool.state}  버퍼 {len(throw.frames)}")
+                    print(f"\r   {msg:<78}", end="", flush=True)
 
                 if reason and armed:
                     throw.end_reason = reason
                     break
+        except KeyboardInterrupt:
+            interrupted = True
+            throw.end_reason = "사용자 중단 (Ctrl-C)"
+            print("\r" + " " * 80 + "\r   중단됨 — 버퍼를 저장하고 분석한다.")
 
-            run_throw(throw)                         # 저장된 프레임으로 다시 풀어 일관성 확보
-            print_throw(throw)
-            if not args.no_measure:
+        print()
+        if not throw.frames:
+            print("   프레임이 하나도 없다. 카메라를 확인할 것.")
+            break
+
+        run_throw(throw)                             # 저장된 프레임으로 다시 풀어 일관성 확보
+        print_throw(throw)
+        if not args.no_measure and throw.preds and not interrupted:
+            try:
                 ask_ground_truth(throw)
+            except (EOFError, KeyboardInterrupt):
+                interrupted = True
 
-            path = LOG_DIR / f"{stamp}_throw{throw.index:02d}.json"
-            path.write_text(json.dumps(throw.to_json(), indent=1, ensure_ascii=False),
-                            encoding="utf-8")
-            print(f"   저장: {path}")
-            throws.append(throw)
-    except KeyboardInterrupt:
-        print("\n중단됨.")
-    finally:
-        cam.close()
+        suffix = "interrupted" if interrupted else f"throw{throw.index:02d}"
+        save_throw(throw, LOG_DIR / f"{stamp}_{suffix}.json")
+        throws.append(throw)
+
+    cam.close()
     return throws
 
 
@@ -343,6 +404,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="궤적 예측 정확도 측정 (로봇 정지 상태)")
     ap.add_argument("--throws", type=int, default=None, help="이 횟수만큼 하고 종료")
     ap.add_argument("--no-measure", action="store_true", help="정답 입력 안 받음")
+    ap.add_argument("--buffer-s", type=float, default=10.0,
+                    help="투척 감지 전에 들고 있을 프레임 길이(초). Ctrl-C로 끊으면 이만큼 저장된다")
     ap.add_argument("--replay", nargs="+", metavar="JSON", help="저장된 관측으로 재실행")
     ap.add_argument("--span", type=float, default=None,
                     help="MIN_TIME_SPAN_S를 덮어써서 실행 (리플레이 비교용)")
