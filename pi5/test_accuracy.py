@@ -523,6 +523,9 @@ def main() -> int:
                     help="MIN_TIME_SPAN_S를 덮어써서 실행 (리플레이 비교용)")
     ap.add_argument("--ratio", type=float, default=None,
                     help="DEPTH_STABILITY_RATIO를 덮어써서 실행")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY=VAL",
+                    help="config의 아무 값이나 덮어쓴다. 여러 번 쓸 수 있다. "
+                         "예: --set MAX_RESIDUAL_PX=12 --set MIN_OBSERVATIONS=6")
     args = ap.parse_args()
 
     if args.span is not None:
@@ -531,6 +534,23 @@ def main() -> int:
     if args.ratio is not None:
         config.DEPTH_STABILITY_RATIO = args.ratio
         print(f"[덮어씀] DEPTH_STABILITY_RATIO = {args.ratio}")
+    for kv in args.set:
+        # 리플레이로 파라미터를 훑을 때 config.py를 매번 고치지 않게 하려는 것.
+        # 오타를 조용히 넘기면 "바꾼 줄 알았는데 안 바뀐" 실험을 하게 되므로 막는다.
+        if "=" not in kv:
+            print(f"[--set] KEY=VALUE 형식이어야 한다: {kv!r}")
+            return 1
+        k, v = kv.split("=", 1)
+        k = k.strip()
+        if not hasattr(config, k):
+            print(f"[--set] config에 없는 이름이다: {k}")
+            return 1
+        try:
+            val = float(v) if "." in v or "e" in v.lower() else int(v)
+        except ValueError:
+            val = v
+        setattr(config, k, val)
+        print(f"[덮어씀] {k} = {val}")
 
     throws = collect_replay(args.replay) if args.replay else collect_live(args)
     if throws:

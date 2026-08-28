@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 import config
+import control
 import trajectory as traj
 
 IDLE, TRACKING, COOLDOWN = "IDLE", "TRACKING", "COOLDOWN"
@@ -231,13 +232,20 @@ class TrackerPool:
                 self.state = IDLE
                 self.ended_at = None
 
-    def reset(self, now: float | None = None, reason: str = "") -> str:
-        """모든 가설을 버리고 COOLDOWN으로 보낸다."""
+    def reset(self, now: float | None = None, reason: str = "",
+              cooldown: bool = True) -> str:
+        """모든 가설을 버린다. `cooldown=True`면 COOLDOWN을 거치고, 아니면 바로 IDLE.
+
+        ★ **명령을 한 번도 안 보냈으면 COOLDOWN이 필요 없다.** COOLDOWN은 "로봇이
+        움직인 뒤 관성으로 미끄러지거나 물체가 통 안에서 튀는 동안 새 트랙을 시작하지
+        않기" 위한 것이다. 오탐을 붙잡고 타임아웃으로 끝난 경우처럼 로봇이 가만히
+        있었다면, 0.8초를 쉬는 건 그 사이에 날아오는 진짜 쓰레기를 놓치는 것뿐이다.
+        """
         self.tracks.clear()
         self.committed = None
         self.started_at = None
         self.ended_at = now
-        self.state = COOLDOWN if now is not None else IDLE
+        self.state = COOLDOWN if (now is not None and cooldown) else IDLE
         return reason
 
     def cycle_end_reason(self, now: float, time_remaining: float | None) -> str | None:
@@ -307,10 +315,10 @@ class TrackerPool:
             self.tracks = self.tracks[:config.MAX_TRACKS]
 
         # ⑤ 채택
-        self._commit(now)
+        self._commit(now, odom_xy)
 
     # ── 채택 ──────────────────────────────────────────────────────────────
-    def _commit(self, now: float) -> None:
+    def _commit(self, now: float, odom_xy) -> None:
         """물리를 통과한 가설 중 하나를 고른다.
 
         ★ **여기서만 TRACKING으로 들어간다.** "검출이 있으면 TRACKING"으로 하면
@@ -321,18 +329,56 @@ class TrackerPool:
         대기 중에도 가설은 계속 돌아간다(싸다). 사이클은 **물리를 통과한 궤적이
         나타난 순간**부터다.
         """
-        if self.committed is not None:
-            if self.committed in self.tracks and self.committed.viable:
-                return
-            self.committed = None          # 죽었으면 놓아준다
-
-        viable = [tr for tr in self.tracks if tr.viable]
-        if not viable:
+        cand = []
+        for tr in self.tracks:
+            if not tr.viable:
+                continue
+            r = self._reach(tr, odom_xy)
+            if r is None:
+                continue
+            ok, need, remaining = r
+            # 정렬 키: ① 도달 가능한 것 먼저 ② 급한 것(남은시간 짧은 것) 먼저
+            cand.append((0 if ok else 1, remaining, need, tr))
+        if not cand:
+            self.committed = None
             return
-        self.committed = min(viable, key=lambda tr: tr.fit.residual_px)
+        cand.sort(key=lambda c: (c[0], c[1]))
+        best = cand[0]
+
+        # 이미 채택한 게 아직 후보에 있으면 **웬만하면 유지한다.** 매 프레임 새로
+        # 고르면 목표가 가설끼리 오가면서 로봇이 갈팡질팡한다.
+        # 예외: 내가 도달 불가가 됐는데 도달 가능한 대안이 있으면 갈아탄다 —
+        #       못 잡을 걸 쫓느니 잡을 수 있는 걸 잡는 게 낫다.
+        for c in cand:
+            if c[3] is self.committed:
+                if c[0] == 0 or best[0] == 1:
+                    return
+                break
+
+        self.committed = best[3]
         if self.state == IDLE:
             self.state = TRACKING
             self.started_at = now
+
+    def _reach(self, track: Tracker, odom_xy) -> tuple[bool, float, float] | None:
+        """`(도달 가능한가, 필요 속력, 남은 시간)`. 착지해가 없으면 None.
+
+        "도달 가능"은 **남은 거리를 남은 시간 안에 갈 수 있는가**다. 이걸 봐야
+        동시에 두 개가 날아올 때 **잡을 수 있는 쪽**을 고를 수 있다. 잔차가 제일
+        작은 걸 고르는 건 "가장 확실한 궤적"이지 "가장 잡기 쉬운 것"이 아니다.
+        """
+        out = track.landing()
+        if out is None:
+            return None
+        lx, ly, remaining = out
+        mx, my = track.moved_since_start(odom_xy)
+        rx, ry = lx - mx, ly - my
+        dist = math.hypot(rx, ry)
+        if remaining <= 1e-3:
+            return (False, math.inf, remaining)
+        need = dist / remaining
+        limit = control.max_body_speed(rx, ry) * config.REACH_MARGIN
+        return (need <= limit, need, remaining)
 
     def best(self) -> Tracker | None:
         """채택된 가설. `update()`가 이미 정해뒀다."""
@@ -374,3 +420,8 @@ class TrackerPool:
     @property
     def n_tracks(self) -> int:
         return len(self.tracks)
+
+    @property
+    def n_viable(self) -> int:
+        """물리를 통과한 가설 수. 2 이상이면 동시에 여러 개가 날아온 것이다."""
+        return sum(1 for tr in self.tracks if tr.viable)

@@ -75,12 +75,18 @@ def run() -> None:
                 commanded = True
                 utils.log_cycle(track.fit, (landing_x, landing_y), time_remaining,
                                 odom_xy, cmd)
+                # 바퀴별 속도는 보내지 않지만(피코가 계산한다) 로그에는 남긴다 —
+                # 어느 바퀴가 한계에 붙었는지 봐야 튜닝이 된다. 붙은 바퀴엔 ! 표시.
+                utils.log(control.describe(cmd))
 
             # ── ⑥ 사이클 종료 ───────────────────────────────────────────
             if reason:
                 utils.log(f"cycle end — {reason} (관측 {pool.n}, "
                           f"스팬 {pool.time_span:.2f}s, 가설 {pool.n_tracks}개)")
-                pool.reset(now, reason)
+                # ★ 움직이지 않았으면 COOLDOWN 없이 바로 다음 궤적을 기다린다.
+                #   COOLDOWN은 "움직인 뒤 관성/튐"을 위한 것이라, 가만히 있었으면
+                #   0.8초를 쉬는 건 그 사이 날아오는 걸 놓치는 것뿐이다.
+                pool.reset(now, reason, cooldown=commanded)
                 if commanded:
                     link.send_command(control.STOP)
                     commanded = False
