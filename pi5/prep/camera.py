@@ -91,9 +91,15 @@ SPECS: dict[str, CameraSpec] = {
     "gs": CameraSpec(
         name="InnoMaker CAM-IMX296Color-GS + 번들 M12 2.8mm 어안 (ZH3019-14)",
         width=1456, height=1088, fps=60,
-        calib_model="pinhole", exposure_us=1000, gain=4.0,
-        max_exposure_us=1000, max_gain=16.0,   # auto_lock이 그 이상으로 늘리지 못하게
+        calib_model="fisheye", exposure_us=1000, gain=4.0,   # ⚠ 어안이다. pinhole 로
+                                                # 캘리브레이션하면 가장자리가 크게 어긋난다
+        max_exposure_us=1000, max_gain=32.0,   # auto_lock이 그 이상으로 늘리지 못하게
                                                 # 상한을 exposure_us와 같이 잡아뒀다.
+                                                # ⚠ 16.0에서 32.0으로 올림(2026-08-12) — 실내
+                                                # 조명에서 너무 어둡게 찍히는 문제 때문. 노출은
+                                                # 그대로 1ms로 묶어 블러 억제는 유지하고, 게인만
+                                                # 더 허용해 빛을 보충한다. 노이즈는 늘어나므로
+                                                # 찍힌 사진이 너무 지글거리면 낮출 것.
         note="라즈베리파이 공식 GS 카메라와 동일 스펙(제조사가 호환품으로 표기). "
              "Sony IMX296 Color, 1456x1088, 픽셀 3.45µm, 센서 대각 6.3mm(1/2.9\"), "
              "글로벌 셔터, 최대 60fps, C/CS 마운트, 최소 노출 30µs. "
