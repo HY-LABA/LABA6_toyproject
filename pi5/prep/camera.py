@@ -16,30 +16,10 @@
     | CSI v2 (IMX219)        | 고정 ~62°     | 롤링   | pinhole           |
     | CSI v3 (IMX708)        | 고정 ~66°     | 롤링   | pinhole           |
     | IMX219 + M12 LS40136   | 광각 (확인필요) | 롤링   | **화각 보고 결정** |
-    | IMX296-GS + 2.8mm      | **어안 133.5°** | 글로벌 | **fisheye**       |
+    | IMX296-GS + 2.8mm      | 어안 140°     | 글로벌 | **fisheye**       |
 
-  화각 90°를 넘어가면 핀홀 모델이 성립하지 않는다. 어안을 pinhole로 캘리브레이션하면
+  화각 90°를 넘어가면 핀홀 모델이 성립하지 않는다. 140° 렌즈를 pinhole로 캘리브레이션하면
   가장자리에서 크게 어긋난다.
-
-┌─ ⚠ 렌즈 표기 화각에서 f 를 역산하지 말 것 (실측으로 확인) ─────────────────┐
-│ 번들 ZH3019-14 표기는 **2.8mm, D=148° / H=118°** 다.                       │
-│                                                                          │
-│   2026-08-19 체커보드 캘리브레이션 (23장, RMS 0.411px, 격자판 교차검증)   │
-│     fx 973.3  fy 974.1  cx 657.6  cy 535.6                               │
-│     대각 **133.5°** / 수평 94.0° / 수직 67.0°                             │
-│                                                                          │
-│ 줄자 검증: 벽에서 1.02m, 화면 가로 실폭 측정 2.20m.                        │
-│   캘리브레이션 예측 2.23m (+1.4%)  vs  표기 역산 예측 2.94m (-25%).        │
-│                                                                          │
-│ 예전에 이 자리에는 f_px 755 가 적혀 있었다. 표기 화각에서 **왜곡이 없다고  │
-│ 가정**하고 역산한 값이라 틀렸다. 실제로는 가장자리가 압축돼서 f_px 가       │
-│ 크면서도 화각이 넓다 — 973 과 133.5° 는 모순이 아니다. 표기 화각 자체는     │
-│ 꽤 정확했다 (역산 138° vs 실측 133.5°, 3.3% 차이).                        │
-│ 다만 **수평은 110.5° -> 94.0° 로 16.5° 좁다.**                            │
-│                                                                          │
-│ 모델은 cv2.fisheye (r = f·θ_d). θ_d/θ 는 중심 0.996 -> 모서리 0.857 로     │
-│ 단조 감소한다 — 중심부 등거리, 가장자리 14% 압축.                          │
-└──────────────────────────────────────────────────────────────────────────┘
 
   ⚠ 궤적 추정이 중력 기반 최소제곱으로 바뀌었으므로(pi5/trajectory.py) 캘리브레이션
     정확도가 예전보다 **더** 중요해졌다. f_px와 주점이 틀리면 깊이가 통째로 틀어진다.
@@ -89,31 +69,32 @@ SPECS: dict[str, CameraSpec] = {
     ),
     # 지금 쓰는 것 — 도착해서 장착 완료 (2026-08-06) ─────────────────────────
     "gs": CameraSpec(
-        name="InnoMaker CAM-IMX296Color-GS + 번들 M12 2.8mm 어안 (ZH3019-14)",
+        name="InnoMaker CAM-IMX296Color-GS + 6mm CS 렌즈",
         width=1456, height=1088, fps=60,
-        calib_model="fisheye", exposure_us=1000, gain=4.0,   # ⚠ 어안이다. pinhole 로
-                                                # 캘리브레이션하면 가장자리가 크게 어긋난다
-        max_exposure_us=1000, max_gain=32.0,   # auto_lock이 그 이상으로 늘리지 못하게
+        calib_model="pinhole", exposure_us=2000, gain=9.0,
+        max_exposure_us=2000, max_gain=16.0,   # auto_lock이 그 이상으로 늘리지 못하게
                                                 # 상한을 exposure_us와 같이 잡아뒀다.
-                                                # ⚠ 16.0에서 32.0으로 올림(2026-08-12) — 실내
-                                                # 조명에서 너무 어둡게 찍히는 문제 때문. 노출은
-                                                # 그대로 1ms로 묶어 블러 억제는 유지하고, 게인만
-                                                # 더 허용해 빛을 보충한다. 노이즈는 늘어나므로
-                                                # 찍힌 사진이 너무 지글거리면 낮출 것.
+                                                # ⚠ 실측으로 확정(2026-08-12, tune_camera.py):
+                                                # exposure_us=2000/gain=9 조합이 밝기(mean≈80,
+                                                # 건강 범위 40~200)와 노이즈 둘 다 괜찮았다.
+                                                # 블러 계산상(2ms×1.5~2m/s≈3~4mm) 여유도 있음.
+                                                # ⚠ max_gain은 32까지 실험했다가 노이즈가 너무
+                                                # 심해서(2026-08-18) 16으로 다시 내림. 9(실제
+                                                # 동작점) 대비 여유는 주면서 32 같은 과도한
+                                                # 노이즈 구간엔 안 들어가게 하는 선.
         note="라즈베리파이 공식 GS 카메라와 동일 스펙(제조사가 호환품으로 표기). "
              "Sony IMX296 Color, 1456x1088, 픽셀 3.45µm, 센서 대각 6.3mm(1/2.9\"), "
              "글로벌 셔터, 최대 60fps, C/CS 마운트, 최소 노출 30µs. "
              "출력이 YUV라 공식(RAW10)과 다르지만 libcamera가 변환하므로 "
              "RGB888 요청 그대로 쓰면 된다. 외부 하드웨어 트리거도 지원하나 "
              "센서 타임스탬프로 충분해서 쓰지 않는다. "
-             "렌즈는 번들 ZH3019-14 (M12, 표기 2.8mm, F2.2). "
-             "**어안이라 반드시 fisheye로 캘리브레이션한다.** "
-             "2026-08-19 실측: 대각 133.5°, 수평 94.0°, f_px 973. "
-             "표기 화각에서 f 를 역산하지 말 것 — 왜곡을 무시하면 틀린다. "
-             "주변 광량이 중심의 52%까지 떨어지니(제조사 표기) 가장자리 검출을 "
-             "따로 확인할 것. 글로벌 셔터라 낙하 물체가 기울어지지 않고, 픽셀이 "
-             "커서(IMX219의 3배) 노출을 짧게 가져갈 수 있다. 모션 블러가 줄면 "
-             "검출 노이즈가 줄고 그게 곧 깊이 추정 정확도다 — 이 카메라의 최대 이점.",
+             "6mm 렌즈에서 f_px=6.0/3.45µm=1739, "
+             "화각 수평45°/수직35°/대각55°. 렌즈 이름의 '광각'은 HQ 카메라(대각 7.9mm) "
+             "기준이고 이 센서(6.3mm)에서는 오히려 표준에 가깝다 — **대각 55°라 "
+             "pinhole로 캘리브레이션한다. 어안 아니다.** 글로벌 셔터라 낙하 물체가 "
+             "기울어지지 않고, 픽셀이 커서(IMX219의 3배) 노출을 아주 짧게 가져갈 수 "
+             "있다(제조사 표기 최소 30µs). 모션 블러가 줄면 검출 노이즈가 줄고 그게 "
+             "곧 깊이 추정 정확도다 — 이 카메라의 가장 큰 이점.",
     ),
     # 지금 쓰는 것 — IMX219 + M12 교환식 렌즈 (2026-08-10) ──────────────────
     "imx219m12": CameraSpec(
@@ -142,9 +123,11 @@ DEFAULT = "gs"
 class Camera:
     """Picamera2(라파이) 또는 OpenCV(웹캠/USB)를 같은 인터페이스로 감싼다."""
 
-    def __init__(self, spec: CameraSpec, backend: str = "auto", auto_lock: bool = False) -> None:
+    def __init__(self, spec: CameraSpec, backend: str = "auto", auto_lock: bool = False,
+                 want_lores: bool = False) -> None:
         self.spec = spec
         self.auto_lock = auto_lock
+        self.want_lores = want_lores
         self._impl = None
         self._kind = None
 
@@ -165,8 +148,12 @@ class Camera:
         from picamera2 import Picamera2  # 라파이에만 있다
 
         cam = Picamera2()
+        # want_lores: 녹화 중 가벼운 움직임 감지(버저용)를 하려고 저해상도 보조
+        # 스트림을 따로 연다. 메인 스트림(녹화용)과 별개 경로라 인코더에 영향 없다.
+        lores = {"size": (320, 240), "format": "YUV420"} if self.want_lores else None
         cfg = cam.create_video_configuration(
             main={"size": (self.spec.width, self.spec.height), "format": "RGB888"},
+            lores=lores,
             controls={"FrameRate": float(self.spec.fps)},
         )
         cam.configure(cfg)
@@ -270,6 +257,44 @@ class Camera:
             raise RuntimeError("프레임 읽기 실패")
         return frame, t
 
+    def read_with_sensor_ts(self) -> tuple[np.ndarray, float]:
+        """(BGR 프레임, 센서 타임스탬프[s]). Picamera2 전용 — 실시간 궤적 피팅(vision.py)이
+        쓴다.
+
+        read()와 다르게 time.monotonic()(파이썬이 프레임을 받은 시각, 스케줄링 지터가
+        섞임) 대신 **SensorTimestamp**(센서가 실제로 노출을 끊은 시각)를 쓴다.
+        capture_request()로 프레임과 메타데이터를 한 번에 받아야 서로 다른 프레임의
+        값이 섞이지 않는다 (capture_array()+capture_metadata()를 따로 부르면 그 사이
+        다음 프레임이 끼어들 수 있다).
+
+        SensorTimestamp의 기준(0점)은 임의(보통 부팅 시각)라 절대값은 의미 없다 —
+        trajectory.py도 차이만 쓰므로 문제없다.
+        """
+        if self._kind != "picamera2":
+            raise RuntimeError("read_with_sensor_ts는 Picamera2 전용이다.")
+        request = self._impl.capture_request()
+        try:
+            frame = request.make_array("main").copy()
+            meta = request.get_metadata()
+        finally:
+            request.release()
+        t = meta["SensorTimestamp"] / 1e9   # ns -> s
+        return frame, t
+
+    def capture_lores(self) -> np.ndarray:
+        """저해상도 보조 스트림에서 밝기(흑백) 프레임만 뽑는다.
+
+        want_lores=True로 열었을 때만 쓸 수 있다. capture_video.py가 녹화 중
+        가벼운 움직임 감지(버저)용으로 쓴다 — 메인 스트림/인코더와는 무관하다.
+        """
+        if self._kind != "picamera2" or not self.want_lores:
+            raise RuntimeError("capture_lores는 want_lores=True로 연 Picamera2에서만 된다.")
+        arr = self._impl.capture_array("lores")
+        # YUV420 평면 배열: 위쪽 2/3가 밝기(Y) 평면이다. 움직임 감지엔 밝기면 충분해서
+        # 색상(U/V) 평면은 버린다.
+        y_h = arr.shape[0] * 2 // 3
+        return arr[:y_h]
+
     def set_manual(self, exposure_us: int | None = None, gain: float | None = None) -> None:
         """실행 중에 노출/게인을 바꾼다 (Picamera2 전용, tune_camera.py가 씀).
 
@@ -290,6 +315,42 @@ class Camera:
             gain=gain if gain is not None else self.spec.gain,
         )
 
+    def start_recording(self, path: str, bitrate: int = 20_000_000,
+                         codec: str = "h264") -> None:
+        """영상 녹화 시작 (Picamera2 전용, capture_video.py가 씀).
+
+        MOG2/imwrite 없이 인코더로 바로 쓰므로 캡처 중 Python 처리로 인한 프레임
+        드랍이 없다 — 단, 인코딩 자체가 병목이 될 수 있다.
+
+        ⚠ 라즈베리파이 5는 하드웨어 H.264 인코더가 없다(Pi4까지는 있었음). 그래서
+        `codec="h264"`는 소프트웨어 인코딩이라 1456x1088@60fps를 못 따라가면
+        녹화 중 자체적으로 프레임이 밀릴 수 있다. `codec="mjpeg"`는 프레임마다
+        독립적으로 JPEG 압축하는 방식이라 계산이 훨씬 가볍고(모션 보상 없음),
+        데이터셋에 쓰는 개별 프레임 JPEG 압축과 특성이 같아 검출 노이즈 걱정도
+        덜하다. 대신 파일 용량은 더 크다. 어느 쪽이 실제로
+        fps를 잘 유지하는지는 실기에서 확인해야 한다.
+
+        ffmpeg가 시스템에 설치돼 있어야 한다 (`sudo apt install ffmpeg`).
+        """
+        if self._kind != "picamera2":
+            raise RuntimeError("영상 녹화는 Picamera2 전용이다.")
+        from picamera2.outputs import FfmpegOutput
+
+        if codec == "h264":
+            from picamera2.encoders import H264Encoder
+            self._encoder = H264Encoder(bitrate=bitrate)
+        elif codec == "mjpeg":
+            from picamera2.encoders import MJPEGEncoder
+            self._encoder = MJPEGEncoder(bitrate=bitrate)
+        else:
+            raise ValueError(f"알 수 없는 codec: {codec!r} ('h264' 또는 'mjpeg')")
+        self._impl.start_recording(self._encoder, FfmpegOutput(path))
+
+    def stop_recording(self) -> None:
+        if self._kind == "picamera2" and getattr(self, "_encoder", None) is not None:
+            self._impl.stop_recording()
+            self._encoder = None
+
     def close(self) -> None:
         if self._impl is None:
             return
@@ -303,7 +364,8 @@ class Camera:
 def open_camera(profile: str = DEFAULT, backend: str = "auto",
                  exposure_us: int | None = None, gain: float | None = None,
                  auto_lock: bool | None = None,
-                 max_exposure_us: int | None = None, max_gain: float | None = None) -> Camera:
+                 max_exposure_us: int | None = None, max_gain: float | None = None,
+                 want_lores: bool = False) -> Camera:
     """auto_lock=None(기본)이면: 수동으로 exposure_us/gain을 안 줬을 때만 자동측정 후
     고정한다. 매번 킬 때 조명이 뭐가 됐든 알아서 재고 고정하는 게 기본 동작이고,
     명시적으로 숫자를 준 경우에만 그 숫자를 존중해 자동측정을 건너뛴다.
@@ -332,7 +394,7 @@ def open_camera(profile: str = DEFAULT, backend: str = "auto",
         overrides["max_gain"] = max_gain
     if overrides:
         spec = dataclasses.replace(spec, **overrides)
-    cam = Camera(spec, backend, auto_lock=auto_lock)
+    cam = Camera(spec, backend, auto_lock=auto_lock, want_lores=want_lores)
     spec = cam.spec   # auto_lock이면 여기서 실측값으로 갱신돼 있다
     print(f"[camera] {spec.name} ({spec.width}x{spec.height} @{spec.fps}fps, "
           f"backend={cam.backend}, calib={spec.calib_model}, "

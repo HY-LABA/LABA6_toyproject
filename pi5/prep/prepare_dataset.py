@@ -66,7 +66,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 RAW = pathlib.Path("dataset_raw")
-# 단일 클래스 (2026-08-10). capture_dataset.py / extract_from_video.py 와 같아야 한다.
+# 단일 클래스 (2026-08-10). capture_video.py / extract_from_video.py 와 같아야 한다.
 CLASS_NAME = "trash"
 
 # 세션 이름에서 클래스를 알아내던 코드가 있었는데 지웠다. 이유 두 가지:
