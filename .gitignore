@@ -30,3 +30,16 @@ Thumbs.db
 
 # 작업 노트 (비공개, 팀 공유 안 함)
 NOTES.md
+
+# prep/ 산출물 (용량 크고 재생성 가능)
+prep/dataset_raw/
+prep/dataset/
+prep/calib/
+prep/sigma_w/
+prep/runs/
+runs/
+*.png
+*.onnx
+
+# test_accuracy.py 가 저장하는 투척 로그 (개인 실험 데이터)
+pi5/logs/

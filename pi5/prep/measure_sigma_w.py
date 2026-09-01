@@ -158,7 +158,7 @@ def main() -> int:
     m.add_argument("--weights", required=True)
     m.add_argument("--imgsz", type=int, default=640)
     m.add_argument("--conf", type=float, default=0.25)
-    m.add_argument("--f-px", type=float, default=792.0,
+    m.add_argument("--f-px", type=float, default=973.0,
                    help="캘리브레이션에서 얻은 f_px (기본값은 GS+2.8mm 이론값)")
     m.add_argument("--object-w-m", type=float, default=0.066, help="물체 실물 폭(m)")
     m.set_defaults(func=cmd_measure)
