@@ -91,11 +91,12 @@ SPECS: dict[str, CameraSpec] = {
     "gs": CameraSpec(
         name="InnoMaker CAM-IMX296Color-GS + 번들 M12 2.8mm 어안 (ZH3019-14)",
         width=1456, height=1088, fps=60,
-        calib_model="fisheye", exposure_us=1000, gain=4.0,
+        calib_model="pinhole", exposure_us=1000, gain=4.0,
         max_exposure_us=1000, max_gain=16.0,   # auto_lock이 그 이상으로 늘리지 못하게
                                                 # 상한을 exposure_us와 같이 잡아뒀다.
-        note="Sony IMX296 Color, 1456x1088, 픽셀 3.45µm, 센서 대각 6.271mm(1/2.9\"), "
-             "글로벌 셔터, 최대 60fps, 최소 노출 30µs. "
+        note="라즈베리파이 공식 GS 카메라와 동일 스펙(제조사가 호환품으로 표기). "
+             "Sony IMX296 Color, 1456x1088, 픽셀 3.45µm, 센서 대각 6.3mm(1/2.9\"), "
+             "글로벌 셔터, 최대 60fps, C/CS 마운트, 최소 노출 30µs. "
              "출력이 YUV라 공식(RAW10)과 다르지만 libcamera가 변환하므로 "
              "RGB888 요청 그대로 쓰면 된다. 외부 하드웨어 트리거도 지원하나 "
              "센서 타임스탬프로 충분해서 쓰지 않는다. "
@@ -253,12 +254,35 @@ class Camera:
         """(BGR 프레임, 캡처 시각[s])."""
         t = time.monotonic()
         if self._kind == "picamera2":
-            frame = self._impl.capture_array()          # RGB888
-            return frame[:, :, ::-1].copy(), t          # -> BGR (OpenCV 관례)
+            # ⚠ Picamera2의 유명한 함정: format="RGB888"로 설정해도 capture_array()는
+            # 이미 BGR 순서로 채워서 준다 (libcamera 픽셀 포맷 이름과 실제 메모리
+            # 순서가 반대). 예전엔 여기서 [:, :, ::-1]로 한 번 더 뒤집었는데, 이미
+            # BGR인 걸 또 뒤집으면 R/B가 스왑돼 빨간 물체가 파랗게 찍힌다.
+            return self._impl.capture_array().copy(), t
         ok, frame = self._impl.read()
         if not ok:
             raise RuntimeError("프레임 읽기 실패")
         return frame, t
+
+    def set_manual(self, exposure_us: int | None = None, gain: float | None = None) -> None:
+        """실행 중에 노출/게인을 바꾼다 (Picamera2 전용, tune_camera.py가 씀).
+
+        재시작 없이 바로 반영된다 — AE/AWB는 계속 꺼둔 채로 값만 갱신한다.
+        """
+        if self._kind != "picamera2":
+            print("[camera] set_manual은 Picamera2 전용이다 — OpenCV 백엔드에서는 무시된다.")
+            return
+        controls: dict = {"AeEnable": False, "AwbEnable": False}
+        if exposure_us is not None:
+            controls["ExposureTime"] = exposure_us
+        if gain is not None:
+            controls["AnalogueGain"] = gain
+        self._impl.set_controls(controls)
+        self.spec = dataclasses.replace(
+            self.spec,
+            exposure_us=exposure_us if exposure_us is not None else self.spec.exposure_us,
+            gain=gain if gain is not None else self.spec.gain,
+        )
 
     def close(self) -> None:
         if self._impl is None:

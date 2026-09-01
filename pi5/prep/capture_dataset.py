@@ -206,51 +206,27 @@ def build_parser() -> argparse.ArgumentParser:
                          "찾은 파라미터를 녹화본 전체에 적용해 라벨을 뽑을 때 쓴다 (PC에서)")
     ap.add_argument("--no-display", dest="display", action="store_false",
                     help="창을 띄우지 않는다. SSH/VNC 로 접속했다면 반드시 붙일 것 — "
-                         "X11 로 프레임을 보내는 비용이 프레임률을 10분의 1로 떨어뜨린다")
-
-    g = ap.add_argument_group("검출기")
-    g.add_argument("--detector", choices=["ref", "mog2"], default="ref",
-                   help="ref=기준 프레임 차분(가볍고 깜빡임에 강함) / mog2=기존 방식")
-    g.add_argument("--no-normalize", dest="normalize", action="store_false",
-                   help="밝기 정규화를 끈다 (ref 전용). 정규화가 오히려 해로울 때만")
-    g.add_argument("--warmup", type=int, default=60, help="배경 학습 프레임 수")
-    # ⚠ 두 검출기의 임계값은 **단위가 다르다.** 같은 이름을 쓰면 안 된다.
-    #   ref  : 밝기 차이 그 자체 (0~255). "배경보다 25 이상 어둡거나 밝으면 전경"
-    #   mog2 : 그 픽셀의 학습된 분산 대비 마할라노비스 거리의 제곱. 밝기 단위가 아니다
-    g.add_argument("--diff-threshold", type=float, default=25.0,
-                   help="[ref] 배경과 밝기가 이만큼 이상 다르면 전경 (0~255)")
-    g.add_argument("--var-threshold", type=float, default=25.0,
-                   help="[mog2] 배경 모델 대비 분산 기준 거리. 밝기 단위가 아니다")
-    g.add_argument("--history", type=int, default=300, help="[mog2] 배경 학습 프레임 수")
-
-    g = ap.add_argument_group("블롭 필터")
-    g.add_argument("--min-area", type=int, default=80)
-    g.add_argument("--max-area-frac", type=float, default=0.25,
-                   help="프레임 대비 최대 면적. 넘으면 손/사람으로 본다")
-    g.add_argument("--min-aspect", type=float, default=0.2)
-    g.add_argument("--max-aspect", type=float, default=5.0)
-    g.add_argument("--min-fill", type=float, default=0.3, help="bbox 대비 윤곽 채움 비율")
-    g.add_argument("--edge-margin", type=int, default=4)
-    g.add_argument("--close-iters", type=int, default=1,
-                   help="닫힘 반복(0이면 안 함). 크면 구멍은 잘 메우지만 작은 물체의 "
-                        "중심이 밀린다. tune_params.py 로 실측해서 정할 것")
-
-    g = ap.add_argument_group("추적·저장")
-    g.add_argument("--arm-frames", type=int, default=2,
-                   help="연속 이 프레임 이상 유효해야 '확정'하고 추적을 시작한다. "
-                        "확정 전까지 모아둔 프레임도 확정되는 순간 같이 저장된다")
-    g.add_argument("--track-grace", type=int, default=3,
-                   help="추적 중 연속으로 이 프레임까지는 놓쳐도 계속 따라가며 저장한다")
-    g.add_argument("--jpeg-quality", type=int, default=85,
-                   help="95는 인코딩이 무겁고 학습 품질 차이는 없다")
-    g.add_argument("--max-frames", type=int, default=0, help="0이면 무제한")
-    return ap
-
-
-def main() -> int:
-    import cv2
-
-    args = build_parser().parse_args()
+                         "X11 로 프레임을 보내는 비용이 30fps를 3fps로 떨어뜨린다")
+    ap.add_argument("--warmup", type=int, default=60, help="배경 학습 프레임 수")
+    ap.add_argument("--arm-frames", type=int, default=2,
+                    help="연속 이 프레임 이상 유효해야 '확정'하고 추적을 시작한다 (손 구간 "
+                         "오검출 회피). 확정 전까지 모아둔 프레임도 확정되는 순간 같이 "
+                         "저장된다 — 버려지지 않는다.")
+    ap.add_argument("--track-grace", type=int, default=3,
+                    help="추적 중 연속으로 이 프레임까지는 놓쳐도(모션블러로 필터가 잠깐 "
+                         "튐 등) 물체가 사라진 걸로 안 보고 계속 따라가며 저장한다. 넘으면 "
+                         "그때 추적을 끝내고 다음 확정을 기다린다.")
+    ap.add_argument("--min-area", type=int, default=80)
+    ap.add_argument("--max-area-frac", type=float, default=0.25,
+                    help="프레임 대비 최대 면적. 넘으면 손/사람으로 본다")
+    ap.add_argument("--min-aspect", type=float, default=0.2)
+    ap.add_argument("--max-aspect", type=float, default=5.0)
+    ap.add_argument("--min-fill", type=float, default=0.3, help="bbox 대비 윤곽 채움 비율")
+    ap.add_argument("--edge-margin", type=int, default=4)
+    ap.add_argument("--history", type=int, default=300)
+    ap.add_argument("--var-threshold", type=float, default=25.0)
+    ap.add_argument("--max-frames", type=int, default=0, help="0이면 무제한")
+    args = ap.parse_args()
 
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     session = f"{args.label}_{args.camera}_{stamp}"
@@ -292,9 +268,7 @@ def main() -> int:
     streak = 0
     tracking = False
     miss = 0
-    throw = 0                 # 투척 회차. 확정될 때마다 1씩 오른다
-    pending: list = []        # 확정 전 보류 프레임
-    frame_meta: list[dict] = []   # review_labels.py 의 자동 선별이 쓴다
+    pending: list[tuple[np.ndarray, tuple[int, int, int, int]]] = []
     paused = False
     reasons: dict[str, int] = {}
     fps_log: list[float] = []
@@ -348,7 +322,7 @@ def main() -> int:
                 # 우연한 블롭 하나로 오검출되는 걸 막는다.
                 if box:
                     streak += 1
-                    pending.append((frame, box, t_cap))
+                    pending.append((frame.copy(), box))
                     good = True
                     if streak >= args.arm_frames:
                         throw += 1
@@ -360,16 +334,19 @@ def main() -> int:
                 else:
                     streak = 0
                     pending.clear()
-            elif box:
-                miss = 0
-                save(frame, box, t_cap)
-                good = True
             else:
-                miss += 1
-                if miss > args.track_grace:
-                    # 유예를 넘게 놓쳤다 — 물체가 진짜로 사라진 것으로 본다.
-                    tracking, streak, miss = False, 0, 0
-                    flush_meta()
+                # 확정된 물체를 추적 중 — 사라질 때까지 매 프레임 저장한다.
+                if box:
+                    miss = 0
+                    _save(frame, box)
+                    good = True
+                else:
+                    miss += 1
+                    if miss > args.track_grace:
+                        # 유예 프레임을 넘게 놓쳤다 — 물체가 진짜로 사라진 것으로 본다.
+                        tracking = False
+                        streak = 0
+                        miss = 0
 
             # 그리기와 창 전송은 --display 일 때만. 원격 접속에서는 이 블록 하나가
             # 나머지 전부를 합친 것보다 비싸다 (프레임당 6MB 넘게 나간다).
