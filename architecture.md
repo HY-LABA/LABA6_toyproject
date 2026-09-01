@@ -31,14 +31,11 @@ LABA6_toyproject/
 │       ├── camera.py             # 카메라 추상화 — 카메라 교체 시 여기만 손댄다
 │       ├── check_setup.py        # 실행 전 환경 점검
 │       ├── tune_camera.py        # 노출/게인 라이브 튜닝 (키보드 조작, GUI 슬라이더는 Pi에서 크래시남)
-│       ├── measure_focal_length.py  # 줄자+격자판으로 f_px 실측 (캘리브레이션 이전 약식 확인용)
-│       ├── capture_dataset.py    # MOG2 자동 검출·라벨링으로 YOLO 데이터셋 실시간 수집
-│       ├── capture_video.py      # (신규) 영상만 무처리 녹화 (MJPEG, 촬영 중 버저) — 아래 extract와 짝
-│       ├── extract_from_video.py # (신규) 녹화 영상에서 오프라인 MOG2 추출 + 라벨링 (`--review` 지원)
+│       ├── capture_video.py      # 영상만 무처리 녹화 (MJPEG, 촬영 중 버저) + 공용 CLASSES/BlobFinder — 아래 extract와 짝
+│       ├── extract_from_video.py # 녹화 영상에서 오프라인 MOG2 추출 + 라벨링 (`--review` 지원)
 │       ├── review_labels.py      # 자동 라벨 수동 검수 — 투척 단위 크롭, `--zoom`/전체화면(F) (PC에서)
 │       ├── prepare_dataset.py    # 세션 단위 train/val/test 분할 + dataset.yaml
 │       ├── train_yolo.py         # YOLOv8n 전이학습 (PC/Colab)
-│       ├── measure_sigma_w.py    # (구) σ_w 측정 — 합격 기준 폐기, 참고용만
 │       └── TROUBLESHOOTING.md    # 실기 작업 기록 — 겪은 문제와 해결
 │
 │   ⚠ `prep/calibrate.py`(체스보드 캘리브레이션, capture+solve)는 아직 `seon` 브랜치에만
@@ -98,14 +95,11 @@ LABA6_toyproject/
 | `camera.py` | **카메라를 바꿀 때 손대는 유일한 파일.** 프로파일(해상도/fps/노출/게인/캘리브레이션 모델)을 `SPECS`에 두고 Picamera2↔OpenCV를 같은 인터페이스로 감싼다. 자동 노출 측정 후 고정(`auto_lock`), 셔터 우선 상한, 노이즈 리덕션 차단(MOG2에 잔상을 남긴다)까지 처리 |
 | `check_setup.py` | 패키지·카메라·디스크 사전 점검. 밝기 진단도 출력 |
 | `tune_camera.py` | 노출/게인 라이브 튜닝. GUI 슬라이더(`cv2.createTrackbar`)가 Pi에서 Qt 크래시가 나서, 키보드(`w/s/e/d` 등)로 조작하는 방식으로 바꿈 |
-| `measure_focal_length.py` | 줄자+벽에 붙인 격자판으로 f_px 약식 실측. 체스보드 캘리브레이션(`prep/calibrate.py`, `seon` 브랜치) 전 대략적인 크로스체크용 |
-| `capture_dataset.py` | MOG2 배경차분으로 투척 물체를 자동 검출해 **YOLO 라벨(.txt)까지 자동 생성**하며 **실시간으로** 수집. 확정 전 프레임을 모아뒀다 확정 시 함께 저장하고, 확정 후에는 `--track-grace`만큼 놓쳐도 추적을 유지한다. `--no-display`(원격 접속 시 필수), 실효 fps 출력 |
-| `capture_video.py` | (신규) **실시간 처리 없이 영상만 녹화** — MOG2를 프레임 캡처 핫루프에서 빼서 병목 제거. MJPEG 기본(Pi5는 HW H.264 인코더 없음), 촬영 중 물체 포착 시 버저(lores 스트림 프레임차 검사) |
-| `extract_from_video.py` | (신규) 녹화된 영상에서 **오프라인으로** MOG2 추출 + 자동 라벨링. `capture_dataset.py`와 같은 `BlobFinder`/상태머신 재사용. `--review`로 저장 전 사람이 bbox 확인 가능, 10% 단위 진행률 출력 |
+| `capture_video.py` | **실시간 처리 없이 영상만 녹화** — MOG2를 프레임 캡처 핫루프에서 빼서 병목 제거. MJPEG 기본(Pi5는 HW H.264 인코더 없음), 촬영 중 물체 포착 시 버저(lores 스트림 프레임차 검사). 공용 `CLASSES`/`beep`/`BlobFinder`도 여기 있음 (2026-09-01, 실시간 자동 캡처 도구였던 `capture_dataset.py`를 이 방식이 대체하면서 옮김) |
+| `extract_from_video.py` | 녹화된 영상에서 **오프라인으로** MOG2 추출 + 자동 라벨링. `capture_video.py`의 `BlobFinder`/상태머신 재사용. `--review`로 저장 전 사람이 bbox 확인 가능, 10% 단위 진행률 출력 |
 | `review_labels.py` | 자동 라벨을 사람이 검수·수정·기각. **투척 단위로 크롭만 모아서 봄** (프레임 단위보다 훨씬 빠름). `--zoom`(확대), `+`/`-`(배율 조절), `F`(전체화면 토글). **수집은 라파이 헤드리스, 검수는 PC** 분업 |
 | `prepare_dataset.py` | **세션 단위**로 train/val/test 분할 + `dataset.yaml` 생성. 프레임 단위 무작위 분할은 같은 투척이 양쪽에 들어가 검증 점수를 부풀린다. `--portable`(Colab 반출용 tar), Windows 경로/인코딩 문제 수정됨 |
 | `train_yolo.py` | YOLOv8n COCO 사전학습에서 전이학습. Colab용 `--project`(Drive 저장)·`--resume` 지원. 크기·회전 증강을 좁게 잡는다 |
-| `measure_sigma_w.py` | (구) bbox 폭 분산 측정. **합격 기준으로서는 폐기** — 깊이 추정이 폭을 더 이상 쓰지 않는다. 검출 흔들림의 간접 지표로만 참고 |
 | `TROUBLESHOOTING.md` | 실기 작업 기록. 형광등 맥동, X11 프레임 드롭, 노이즈 리덕션 잔상, 설계 전환 근거와 실측 표 |
 
 ### pico/ (C, Pico SDK) — 실시간 모터 제어

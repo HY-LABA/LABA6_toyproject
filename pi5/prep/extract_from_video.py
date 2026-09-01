@@ -1,7 +1,7 @@
 """녹화된 영상에서 물체 프레임만 뽑아 YOLO 라벨을 만든다 (오프라인, capture_video.py 짝).
 
-`capture_video.py`로 찍은 클립들을 읽어서, `capture_dataset.py`와 **같은 MOG2
-로직**(`BlobFinder` 재사용)으로 물체 트랙을 찾고 프레임+라벨을 저장한다. 캡처와
+`capture_video.py`로 찍은 클립들을 읽어서, 거기 있는 **MOG2 로직**(`BlobFinder`
+재사용)으로 물체 트랙을 찾고 프레임+라벨을 저장한다. 캡처와
 라벨링을 분리했으므로 이 단계는 실시간일 필요가 없다 — 라파이가 아니어도 되고,
 느려도 상관없다. **이 스크립트는 Picamera2가 필요 없다** — 녹화된 .mp4 파일만
 있으면 되므로, GUI가 불안정한 라파이 대신 PC로 클립을 옮겨서 돌리는 걸 추천한다.
@@ -18,8 +18,8 @@
 보통 빈 화면이라는 전제다 (`capture_video.py`가 카운트다운 후 녹화를 시작하므로
 성립한다).
 
-출력: dataset_raw/images|labels/<세션이름>/ — capture_dataset.py와 같은 위치라
-prepare_dataset.py를 그대로 이어서 쓸 수 있다.
+출력: dataset_raw/images|labels/<세션이름>/ — prepare_dataset.py를 그대로 이어서
+쓸 수 있는 위치.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import pathlib
 import cv2
 import numpy as np
 
-from capture_dataset import BlobFinder, CLASSES
+from capture_video import BlobFinder, CLASSES
 
 OUT_ROOT = pathlib.Path("dataset_raw")
 
@@ -91,10 +91,8 @@ def process_clip(path: pathlib.Path, cls_id: int, args,
             f"{bw / w:.6f} {bh / h:.6f}\n", encoding="utf-8")
         saved += 1
 
-    # capture_dataset.py의 확정(arm)/추적 상태기계와 동일하다 — 로직을 두 군데서
-    # 따로 관리하지 않으려면 원래 공용 함수로 빼는 게 맞지만, 지금은 오프라인
-    # 배치 처리라 실시간 루프와 제어 흐름이 미묘하게 달라(파일 vs 라이브 카메라)
-    # 당장은 복제해 둔다.
+    # 확정(arm)/추적 상태기계. 오프라인 배치 처리라 실시간 캡처 루프(파일 vs
+    # 라이브 카메라)와 제어 흐름이 미묘하게 다르다.
     while True:
         ok, frame = cap.read()
         if not ok:

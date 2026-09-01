@@ -80,12 +80,13 @@
       결과(config.py 값)만 옮겨왔다. 팀 브랜치 정리할 때 파일 자체도 합류시킬 것.
       비슷하게 `prep/calib_target_screen.png`(화면에 띄워 캘리브레이션하는 타겟 이미지)는
       Choi-614에 들어와 있다.
-- [x] **영상 우선 수집 파이프라인** — 기존 `capture_dataset.py`(실시간 MOG2 검출)의
-      프레임 캡처 병목을 없애려고 추가:
-      `capture_video.py`(무처리 녹화, MJPEG 기본, 촬영 중 버저) →
+- [x] **영상 우선 수집 파이프라인** — 실시간 MOG2 검출의 프레임 캡처 병목을
+      없애려고 추가: `capture_video.py`(무처리 녹화, MJPEG 기본, 촬영 중 버저) →
       `extract_from_video.py`(오프라인 MOG2 추출, `--review` 저장 전 확인, 10% 진행률).
       `review_labels.py`는 투척 단위 크롭 검수 + `--zoom`/`F`(전체화면)/`+`/`-` 추가.
-      `capture_dataset.py`(기존 실시간 방식)도 그대로 남아있음 — 용도에 따라 택일.
+      **(2026-09-01) `capture_dataset.py`(기존 실시간 자동 캡처 도구)는 이 방식이
+      데이터를 더 잘 모아서 제거함** — 공용 `CLASSES`/`beep`/`BlobFinder`는
+      `capture_video.py`로 옮김.
 - [x] **`predict_trajectory.py` / `yolo_to_csv.py`** — 녹화 영상으로 궤적 예측 파이프라인
       오프라인 검증용. `yolo_to_csv.py`(Colab, 영상+가중치→CSV) →
       `predict_trajectory.py`(로컬, CSV→궤적 계산만, cv2/ultralytics 불필요).
@@ -128,14 +129,14 @@
 
 - 라벨 형식 `cls cx cy w h` — bbox 중심을 적고 있으므로 그대로 유효.
   `w, h`도 계속 적는다 (궤적 추정엔 안 쓰지만 검출기 학습에는 필요)
-- `CLASSES = ["trash"]` — 세 파일(capture/prepare/review) 통일 완료
+- `CLASSES = ["trash"]` — 세 파일(capture_video/prepare/review) 통일 완료
 - `edge` 기각은 유효하다 — 잘린 부분의 중심은 진짜 물체 중심이 아니기 때문
-- `measure_sigma_w.py`는 합격 기준이 아니다. 정지 물체를 거리별로 찍을 필요 없이
-  투척만 하면 된다
+- (2026-09-01) `measure_sigma_w.py`, `measure_focal_length.py`, `capture_dataset.py`
+  삭제함 — 각각 폐기된 지표, 캘리브레이션 완료로 불필요, `capture_video.py`+
+  `extract_from_video.py`가 대체.
 
 남은 것은 설명 주석뿐이다 (동작 무관, 급하지 않음):
-- [ ] `capture_dataset.py` 23·29·102행, `review_labels.py` 6행 — "bbox 폭이 곧 거리"
-      라는 옛 설명이 남아 있다. 나중에 한 번에 정리
+- [ ] `review_labels.py` 6행 — "bbox 폭이 곧 거리"라는 옛 설명이 남아 있다. 나중에 정리
 
 ## 참고
 

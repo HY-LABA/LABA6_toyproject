@@ -39,7 +39,7 @@ import json
 import pathlib
 
 ROOT = pathlib.Path("dataset_raw")
-CLASSES = ["trash"]   # capture_dataset.py와 동일해야 한다 (2026-08-10 단일 클래스로 전환)
+CLASSES = ["trash"]   # capture_video.py와 동일해야 한다 (2026-08-10 단일 클래스로 전환)
 
 
 def load_label(p: pathlib.Path):
