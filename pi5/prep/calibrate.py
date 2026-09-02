@@ -31,7 +31,7 @@ M12는 나사로 돌려 초점을 맞추는 구조라 초점을 다시 잡으면
   ⚠ 보드는 평평해야 한다. 종이가 1mm만 휘어도 왜곡계수가 틀어진다.
   ※ --square-mm 은 fx/fy/cx/cy 에 영향이 없다 (격자를 k배 하면 외부 파라미터만
     k배 되고 내부 파라미터는 불변). 인쇄 배율을 자로 잴 필요 없다.
-**데이터 수집을 막지 않는다** — capture_dataset.py는 초점거리를 쓰지 않는다.
+**데이터 수집을 막지 않는다** — capture_video.py/extract_from_video.py는 초점거리를 쓰지 않는다.
 """
 
 from __future__ import annotations
