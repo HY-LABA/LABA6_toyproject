@@ -1,0 +1,40 @@
+import pygame, socket, math, time
+
+PICO_IP = "192.168.4.1"
+PICO_PORT = 5005
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+pygame.init(); pygame.joystick.init()
+if pygame.joystick.get_count() == 0:
+    print("컨트롤러 없음!"); exit()
+js = pygame.joystick.Joystick(0); js.init()
+print("컨트롤러 연결:", js.get_name())
+
+MAX_DUTY = 55000
+DEADZONE = 0.12
+def dz(v): return 0.0 if abs(v) < DEADZONE else v
+
+WHEEL_ANGLES = [270, 150, 30]   # M1아래, M2좌상, M3우상 (나중에 튜닝)
+
+def ik(vx, vy, omega):
+    speeds = []
+    for a in WHEEL_ANGLES:
+        rad = math.radians(a)
+        w = -math.sin(rad)*vx + math.cos(rad)*vy + omega
+        speeds.append(w)
+    m = max(1.0, max(abs(s) for s in speeds))
+    return [int(s/m * MAX_DUTY) for s in speeds]
+
+print("조종 시작. Ctrl+C 종료.")
+try:
+    while True:
+        pygame.event.pump()
+        vx = dz(js.get_axis(0))
+        vy = -dz(js.get_axis(1))
+        omega = dz(js.get_axis(2))
+        s1, s2, s3 = ik(vx, vy, omega)
+        sock.sendto(f"{s1},{s2},{s3}".encode(), (PICO_IP, PICO_PORT))
+        time.sleep(0.02)
+except KeyboardInterrupt:
+    sock.sendto(b"0,0,0", (PICO_IP, PICO_PORT))
+    print("종료")
