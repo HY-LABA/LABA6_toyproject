@@ -1,0 +1,28 @@
+description: Ultralytics best model trained on /content/dataset/dataset.yaml
+author: Ultralytics
+date: '2026-08-25T15:30:58.754504+09:00'
+version: 8.4.128
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+head: Detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: trash
+args:
+  data: dataset.yaml
+  name: hailo8
+  fraction: 1.0
+  conf: null
+  iou: 0.7
+  quantize: 8
+  simplify: true
+channels: 3
+end2end: false
+hailo_arch: hailo8
+nms: true
+semantic_baked: false
