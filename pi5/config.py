@@ -256,7 +256,7 @@ POSITION_TOLERANCE_M = 0.02
 # ─────────────────────────────────────────────────────────────────────────
 # 시리얼
 # ─────────────────────────────────────────────────────────────────────────
-SERIAL_PORT: str | None = None  # 정해야함: /dev/ttyACM0 등
+SERIAL_PORT: str = "/dev/ttyACM0"
 SERIAL_BAUDRATE = 115200
 SERIAL_TIMEOUT_S = 0.05
 
