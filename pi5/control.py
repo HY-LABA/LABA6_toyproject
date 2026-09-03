@@ -6,20 +6,10 @@
     피코    그 속도 벡터를 바퀴 3개로 분해(역기구학)하고 각 바퀴에 PID를 건다
 
 **파이가 내는 건 바퀴별 속도가 아니라 body 속도 벡터 하나다.** `(vx, vy)` 두 값이
-곧 "로봇 전체가 전방/좌우로 각각 몇 m/s"이고, 이걸 12바이트로 보낸다.
+곧 "로봇 전체가 우측(+X)/전방(+Y)으로 각각 몇 m/s"이고, 이걸 12바이트로 보낸다.
 바퀴별 분해는 `pico/kinematics.c` 의 `inverse_kinematics()` 가 한다.
 
-예전 설계(폐기)와의 차이
-------------------------
-예전에는 **목표 좌표**와 구동시간을 보내고 피코가 `좌표 ÷ 시간`으로 속도를 냈다.
-두 가지가 터졌다:
-
-  ① 피코가 자기 오도메트리를 빼지 않았다 — 매 사이클 "처음부터의 거리"를 다시
-     받아서 이미 이동한 만큼을 또 가려 했다. **오버슈트가 구조적으로 보장돼 있었다.**
-  ② drive_time_s가 0.1초로 잘려서 0.5m 목표면 목표속도가 5 m/s가 됐다. 최대속도가
-     1.22 m/s이므로 PID가 영구 포화 → 감속 구간 없이 "밟으면 끝까지" 동작.
-
-지금은 **남은 거리 ÷ 남은 시간**이라, 목표에 가까워질수록 목표속도가 저절로 줄어든다.
+**남은 거리 ÷ 남은 시간**이라 목표에 가까워질수록 목표속도가 저절로 줄어든다.
 별도 감속 프로파일 없이 P 제어가 감속기 역할을 한다:
 
     남은거리 0.50m / 남은시간 0.50s → 1.00 m/s
@@ -67,7 +57,7 @@ class DriveCommand:
 
     @property
     def heading_deg(self) -> float:
-        """진행 방향(도). 0°=로봇 전방, +가 반시계."""
+        """진행 방향(도). body +X(로봇 우측)에서 반시계로 잰다 — 90°가 전방(M1)."""
         return math.degrees(math.atan2(self.target_vy, self.target_vx))
 
 
@@ -169,7 +159,6 @@ def verify_wheel_config(pico_config: str | None = None) -> list[str]:
     """`pico/config.h` 를 읽어 바퀴 설정이 일치하는지 대조한다. 불일치 목록을 반환.
 
     같은 물리 상수가 파이와 피코 두 곳에 있으면 **한쪽만 고쳤을 때 조용히 틀린다.**
-    (프로토콜을 바꿨을 때 실제로 겪은 실패 유형이다 — 모듈 docstring 참고.)
     파일을 파싱하는 게 투박하지만, 값이 어긋난 채로 굴러가는 것보다 낫다.
     """
     import pathlib
@@ -180,7 +169,8 @@ def verify_wheel_config(pico_config: str | None = None) -> list[str]:
     if not path.is_file():
         return [f"pico/config.h 를 못 찾았다: {path}"]
 
-    text = path.read_text(encoding="utf-8", errors="replace")
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    text = re.sub(r"//.*", "", raw)   # 값 뒤에 붙은 주석은 걷어내고 파싱한다
     problems: list[str] = []
 
     m = re.search(r"WHEEL_ANGLES_RAD\s*\[[^\]]*\]\s*=\s*\{(.*?)\}", text, re.S)

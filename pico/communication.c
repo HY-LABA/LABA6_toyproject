@@ -64,8 +64,7 @@ DriveCommand communication_try_receive(void) {
             case RX_WAIT_CHECKSUM:
                 if (checksum(rx_payload, rx_len) == byte) {
                     // PAYLOAD = <fff> target_vx, target_vy, timeout_s.
-                    // 바이트 수는 예전(좌표+구동시간)과 같지만 의미가 다르다 —
-                    // pi5/communication.py와 반드시 같이 봐야 한다.
+                    // pi5/communication.py 와 반드시 같이 봐야 한다.
                     memcpy(&result.target_vx, &rx_payload[0], 4);
                     memcpy(&result.target_vy, &rx_payload[4], 4);
                     memcpy(&result.timeout_s, &rx_payload[8], 4);

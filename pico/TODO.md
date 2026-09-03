@@ -7,7 +7,8 @@
 - [ ] `MOTOR_PINS[3]` — 모터 3개 각각 rpwm/lpwm/en/enc_a/enc_b 핀 번호
 - [ ] `ENCODER_COUNTS_PER_REV` — 엔코더 실물 스펙(1회전당 펄스 수)
 - [ ] `WHEEL_ANGLES_RAD[3]` / `WHEEL_MOUNT_RADIUS_M` — 조립 후 자·각도기로 실측
-      (지금은 이론값 90/210/330도, 0.15m)
+      배치는 확정됐다: **M1 = 90°(전방, +Y), M2 = 330°(우측 뒤), M3 = 210°(좌측 뒤)**.
+      남은 건 120° 등간격에서 얼마나 어긋났는지와 `WHEEL_MOUNT_RADIUS_M`(지금 0.15m)뿐
 - [ ] `MOTOR_PID[3]` — 모터 실측 튜닝 (지금은 3개 다 동일 placeholder)
 - [ ] **`MAX_BODY_SPEED_MPS`** — 지금 1.22는 이론값
       (FIT0186 251RPM × 0.925 부하감쇠 × π × 0.1m).

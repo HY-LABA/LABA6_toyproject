@@ -4,7 +4,7 @@
 
 ## 1. 실측해서 값만 채우면 되는 것 (config.py)
 
-- [ ] **렌즈 초점거리 확인** ★ — **지금 `CAMERA_FX=1739`는 "6mm 렌즈"라고 가정한 값이다.**
+- [X] **렌즈 초점거리 확인** ★ — **지금 `CAMERA_FX=1739`는 "6mm 렌즈"라고 가정한 값이다.**
       모듈(InnoMaker CAM-IMX296Color-GS) 스펙표에는 초점거리가 `Depends on lens`로만
       되어 있다. C/CS 마운트라 렌즈를 갈아끼우는 구조여서 모듈만으로는 알 수 없다.
 
@@ -28,16 +28,16 @@
 
       데이터 수집은 막지 않는다 (`capture_dataset.py`는 f를 쓰지 않는다).
 
-- [ ] **`CAMERA_FX/FY/CX/CY`** — 체스보드 캘리브레이션으로 확정. (보류 — 데이터 수집 우선)
+- [X] **`CAMERA_FX/FY/CX/CY`** — 체스보드 캘리브레이션으로 확정. (보류 — 데이터 수집 우선)
       위에서 렌즈를 알아내도 그건 여전히 이론값이다. CS 마운트는 백포커스를 나사로
       돌려 맞추는 구조라 초점을 맞추는 과정에서 실효 초점거리가 달라지고, 주점(cx,cy)도
       화면 정중앙이 아니다. **f가 10% 틀리면 깊이도 10% 틀어진다.**
       대각 55°라 pinhole 모델로 하면 된다 (`cv2.calibrateCamera`, 어안 아님)
-- [ ] **`CAMERA_DISTORTION`** — 위 캘리브레이션에서 같이 나온다 (k1,k2,p1,p2,k3).
+- [X] **`CAMERA_DISTORTION`** — 위 캘리브레이션에서 같이 나온다 (k1,k2,p1,p2,k3).
       None이면 보정을 건너뛰는데, 궤적이 화면을 가로지르므로 가장자리 왜곡이 잔차에
       계통적으로 섞인다
-- [ ] `YOLO_MODEL_PATH` — 학습·Hailo 변환 완료 후 `.hef` 경로
-- [ ] **`YOLO_IMGSZ`** — 학습에 실제로 쓴 값과 맞출 것. `train_yolo.py`가 끝날 때
+- [X] `YOLO_MODEL_PATH` — 학습·Hailo 변환 완료 후 `.hef` 경로
+- [X] **`YOLO_IMGSZ`** — 학습에 실제로 쓴 값과 맞출 것. `train_yolo.py`가 끝날 때
       출력한다. 다르면 변환도 되고 추론도 되는데 **정확도만 조용히 떨어지고**,
       이 시스템에서 정확도 저하는 곧 bbox 중심 노이즈 = 깊이 추정 악화다
 - [ ] `ROBOT_MAX_SPEED_MPS` — **모터가 바뀌면서 이론값도 갱신됨** (FIT0493 350RPM →
@@ -56,7 +56,7 @@
       `read()`는 `time.monotonic()`을 쓰는데, 여기서는 **`SensorTimestamp`로 바꿔야 한다**
       — 파이썬이 버퍼를 받은 시각에는 스케줄링 지터가 섞여 있고 궤적 피팅이 그걸 물체의
       운동으로 읽는다
-- [ ] `vision._HailoYolo` — HailoRT 실제 추론 (⚠ API는 실제 버전 문서로 검증 필요)
+- [X] `vision._HailoYolo` — HailoRT 실제 추론 (⚠ API는 실제 버전 문서로 검증 필요)
 - [x] `communication.SerialLink.__init__` — pyserial로 포트 여는 코드 완료.
       **테스트: `teleop_test.py`** — Xbox 컨트롤러 왼쪽 스틱으로 body-frame vx/vy를
       직접 쏴서 피코 모터 응답을 확인. `pico/TODO.md` 2번(최대속도·가속시간·정지거리)
@@ -64,7 +64,7 @@
 
 ## 3. 만들어야 하는 것 / 만든 것
 
-- [ ] **`prep/calibrate.py`** — 체스보드 캘리브레이션 스크립트. (보류 — 데이터 수집 우선)
+- [X] **`prep/calibrate.py`** — 체스보드 캘리브레이션 스크립트. (보류 — 데이터 수집 우선)
       모델은 pinhole로 확정됐으므로 `cv2.calibrateCamera` 한 번이면 된다.
       체스보드 인쇄해서 15~20장 찍고 돌리면 fx/fy/cx/cy + 왜곡계수 5개가 나온다.
       **데이터 수집을 막지 않는다** — `capture_dataset.py`는 초점거리를 쓰지 않는다.
@@ -99,7 +99,7 @@
   투척만 하면 된다
 
 남은 것은 설명 주석뿐이다 (동작 무관, 급하지 않음):
-- [ ] `capture_dataset.py` 23·29·102행, `review_labels.py` 6행 — "bbox 폭이 곧 거리"
+- [X] `capture_dataset.py` 23·29·102행, `review_labels.py` 6행 — "bbox 폭이 곧 거리"
       라는 옛 설명이 남아 있다. 나중에 한 번에 정리
 
 ## 참고

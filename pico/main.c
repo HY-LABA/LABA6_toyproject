@@ -60,8 +60,8 @@ int main(void) {
             }
         }
 
-        // 파이5가 이미 "남은거리 ÷ 남은시간"으로 계산해 보낸 속도다. 여기서
-        // 나눗셈을 하지 않는다 — 그게 예전 오버슈트의 원인이었다.
+        // 파이5가 이미 "남은거리 ÷ 남은시간"으로 계산해 보낸 속도다.
+        // 여기서 나눗셈을 하지 않는다.
         float target_vx = cmd.valid ? cmd.target_vx : 0.0f;
         float target_vy = cmd.valid ? cmd.target_vy : 0.0f;
         float target_omega = 0.0f;

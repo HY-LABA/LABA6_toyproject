@@ -14,7 +14,8 @@ MAX_DUTY = 55000
 DEADZONE = 0.12
 def dz(v): return 0.0 if abs(v) < DEADZONE else v
 
-WHEEL_ANGLES = [270, 150, 30]   # M1아래, M2좌상, M3우상 (나중에 튜닝)
+# 장착 위치각(도). body +X = 우측, +Y = 전방(M1). pico/config.h 와 같은 배치다.
+WHEEL_ANGLES = [90, 330, 210]   # M1 전방, M2 우측 뒤, M3 좌측 뒤
 
 def ik(vx, vy, omega):
     speeds = []
