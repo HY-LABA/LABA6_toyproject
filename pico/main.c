@@ -26,8 +26,15 @@ int main(void) {
     odometry_kalman_init();
 
     int32_t prev_counts[NUM_MOTORS] = {0};
-    DriveCommand cmd = {0};
+
+    // 현재 "구동 모드" — 목표점(TargetCommand)과 속도(teleop/정지) 두 경로 중
+    // 가장 최근에 받은 쪽이 활성화된다 (docs/protocol.md 2장).
+    typedef enum { DRIVE_NONE, DRIVE_TARGET, DRIVE_VELOCITY } DriveMode;
+    DriveMode mode = DRIVE_NONE;
+    float target_x = 0.0f, target_y = 0.0f, time_remaining_s = 0.0f;
+    float vel_vx = 0.0f, vel_vy = 0.0f;
     float cmd_elapsed_s = 0.0f;
+    float cmd_timeout_s = 0.0f;
 
     const float dt = CONTROL_PERIOD_MS / 1000.0f;
     absolute_time_t next_tick = get_absolute_time();
@@ -49,25 +56,58 @@ int main(void) {
         RobotVelocity raw_velocity = {vx, vy, omega};
         RobotVelocity smooth_velocity = odometry_kalman_update(raw_velocity, dt);
 
-        DriveCommand new_cmd = communication_try_receive();
-        if (new_cmd.valid) {
-            cmd = new_cmd;
+        RxCommand new_cmd = communication_try_receive();
+        if (new_cmd.kind == RX_CMD_TARGET) {
+            mode = DRIVE_TARGET;
+            target_x = new_cmd.target_x;
+            target_y = new_cmd.target_y;
+            time_remaining_s = new_cmd.time_remaining_s;
+            cmd_timeout_s = new_cmd.timeout_s;
             cmd_elapsed_s = 0.0f;
-        } else if (cmd.valid) {
+        } else if (new_cmd.kind == RX_CMD_VELOCITY) {
+            mode = DRIVE_VELOCITY;
+            vel_vx = new_cmd.target_vx;
+            vel_vy = new_cmd.target_vy;
+            cmd_timeout_s = new_cmd.timeout_s;
+            cmd_elapsed_s = 0.0f;
+        } else if (mode != DRIVE_NONE) {
             // timeout_s는 구동시간이 아니라 워치독이다. 정상 동작 중에는 파이5가
             // 매 프레임 새 명령을 보내므로 만료되지 않는다. 만료됐다는 건 파이가
             // 죽었거나 링크가 끊겼다는 뜻이므로 세우는 게 맞다.
             cmd_elapsed_s += dt;
-            if (cmd_elapsed_s >= cmd.timeout_s) {
-                cmd.valid = false;
+            if (cmd_elapsed_s >= cmd_timeout_s) {
+                mode = DRIVE_NONE;
             }
         }
 
-        // 파이5가 이미 "남은거리 ÷ 남은시간"으로 계산해 보낸 속도다.
-        // 여기서 나눗셈을 하지 않는다.
-        float target_vx = cmd.valid ? cmd.target_vx : 0.0f;
-        float target_vy = cmd.valid ? cmd.target_vy : 0.0f;
-        float target_omega = 0.0f;
+        float target_vx = 0.0f;
+        float target_vy = 0.0f;
+        const float target_omega = 0.0f;
+
+        if (mode == DRIVE_TARGET) {
+            // docs/protocol.md 2장: 파이는 절대좌표만 보내고, "이미 간 만큼"을
+            // 빼는 건 피코가 자기 오도메트리로 한다 — 그래야 이중으로 안 빠진다.
+            RobotPose pose = odometry_get_pose();
+            float rx = target_x - pose.x;
+            float ry = target_y - pose.y;
+            float dist = sqrtf(rx * rx + ry * ry);
+
+            if (dist > POSITION_TOLERANCE_M) {
+                // 남은거리 ÷ 남은시간 — 목표에 가까워질수록 속도가 저절로 줄어서
+                // 별도 감속 프로파일 없이 P 제어가 감속기 역할을 한다.
+                float v = (time_remaining_s > 0.0f) ? (dist / time_remaining_s) : MAX_BODY_SPEED_MPS;
+                if (v > MAX_BODY_SPEED_MPS) {
+                    v = MAX_BODY_SPEED_MPS;
+                }
+                target_vx = (rx / dist) * v;
+                target_vy = (ry / dist) * v;
+            }
+            // 다음 명령이 오면 덮어쓴다 — 새 명령이 안 오는 동안만 스스로 깎는다.
+            time_remaining_s -= dt;
+        } else if (mode == DRIVE_VELOCITY) {
+            target_vx = vel_vx;
+            target_vy = vel_vy;
+        }
 
         // 안전 클램프. 파이5도 클램프하지만 여기서 한 번 더 막는다 — 통신 오류나
         // 파이 쪽 버그로 말도 안 되는 값이 들어오면 PID가 영구 포화되고, 그 상태에선

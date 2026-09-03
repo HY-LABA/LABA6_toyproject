@@ -101,4 +101,8 @@ static const PidGains MOTOR_PID[NUM_MOTORS] = {
 // 목표 근처에서 바퀴가 아예 안 굴러 영원히 멈추는 문제를 막는 데드밴드 보상.
 #define MIN_DRIVE_DUTY 0.15f
 
+// 목표점(TargetCommand) 도착 판정 — 남은 거리가 이보다 작으면 정지한다
+// (채터링 방지). pi5/config.py의 POSITION_TOLERANCE_M과 같은 값이어야 한다.
+#define POSITION_TOLERANCE_M 0.02f
+
 #endif  // CONFIG_H
