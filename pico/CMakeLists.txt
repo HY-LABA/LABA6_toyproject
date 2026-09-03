@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.13)
 
+set(PICO_BOARD pico2_w)
+
 include(pico_sdk_import.cmake)
 
 project(moving_trash_bin C CXX ASM)

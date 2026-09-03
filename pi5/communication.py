@@ -21,10 +21,8 @@ import config
 from control import DriveCommand
 
 _START_BYTE = 0xAA
-
-_SEND_FORMAT = "<fff"
-_RECV_FORMAT = "<ffffff"
-
+_SEND_FORMAT = "<fff"       # target_vx, target_vy, timeout_s (12바이트)
+_RECV_FORMAT = "<ffffff"    # x, y, theta, vx, vy, omega (24바이트)
 
 @dataclass
 class Odometry:

@@ -4,12 +4,17 @@
 
 ## 1. 부품 도착·배선 후 값 채우기 (config.h)
 
-- [ ] `MOTOR_PINS[3]` — 모터 3개 각각 rpwm/lpwm/en/enc_a/enc_b 핀 번호
-- [ ] `ENCODER_COUNTS_PER_REV` — 엔코더 실물 스펙(1회전당 펄스 수)
-- [ ] `WHEEL_ANGLES_RAD[3]` / `WHEEL_MOUNT_RADIUS_M` — 조립 후 자·각도기로 실측
-      (지금은 이론값 90/210/330도, 0.15m)
-- [ ] `MOTOR_PID[3]` — 모터 실측 튜닝 (지금은 3개 다 동일 placeholder)
-- [ ] **`MAX_BODY_SPEED_MPS`** — 지금 1.8은 이론값(350RPM × π × 0.1m).
+MicroPython 벤치 테스트(`pico_micropython/goto_xy_test.py`, 2026-09)로 아래 값들
+확정 완료, config.h에 반영됨:
+
+- [x] `MOTOR_PINS[3]` — rpwm/lpwm/enc_a/enc_b (en은 3.3V 직결이라 필드 자체를 없앰)
+- [x] `ENCODER_COUNTS_PER_REV` = 687.5 (1체배 PIO 기준)
+- [x] `WHEEL_ANGLES_RAD[3]` — 각도 순서 확정(90/330/210도, 도면으로 실물 대조).
+      **반경(`WHEEL_MOUNT_RADIUS_M`)은 아직 이론값(0.15m) — 자로 실측 필요**
+- [x] `MOTOR_SIGN[3]` — 모터 3개 다 -1 (원인 불명, MicroPython 테스트로 발견·보정)
+- [x] `MOTOR_PID[3]` — {60, 40, 0} (MicroPython 50Hz 기준 검증값. `CONTROL_PERIOD_MS`도
+      1kHz에서 20ms로 맞춤 — Ki/Kd가 dt에 비례하므로 검증 안 된 주기로 쓰면 거동이 달라짐)
+- [ ] **`MAX_BODY_SPEED_MPS`** — 아직 이론값(1.22). 몸체 완성 후 실측 필요.
       **`pi5/config.py`의 `ROBOT_MAX_SPEED_MPS`와 같은 값으로 맞출 것**
 
 ## 2. 모터 돌려보며 실측할 것 ★ 도착하면 제일 먼저
@@ -26,14 +31,17 @@
 
 ## 3. 튜닝
 
-- [x] `main.c`의 `wheel_speed_from_encoder_delta` — 변환식 완성, 값만 채우면 됨
-- [ ] `motor_control.c` — PID output(속도 오차) → PWM 듀티(0~1) 스케일 계수
+- [x] `main.c`의 `wheel_speed_from_encoder_delta` — 변환식 완성, 값 채움
+- [x] `motor_control.c` — PID output → PWM 듀티 스케일 (MicroPython 벤치값으로 확정,
+      안티와인드업·데드밴드 보상도 같이 이식)
 - [ ] `odometry_kalman.c`의 `PROCESS_NOISE`/`MEASURE_NOISE` — 스무딩 정도
+- [ ] 이 값들은 전부 MicroPython 50Hz 루프에서 검증된 것 — **실기 C 빌드로 최종
+      확인 필요** (특히 PID는 같은 dt를 써도 PIO 인터럽트 특성이 달라 재확인 권장)
 
 ## 4. 확인 필요 (하드웨어 스펙)
 
-- [ ] `encoder_pio.c`의 `gpio_pull_up` — 엔코더가 오픈드레인인지 푸시풀인지 확인 후
-      필요 없으면 제거
+- [x] `encoder_pio.c`의 `gpio_pull_up` — MicroPython 벤치 테스트에서 3.3V 내부
+      풀업 직결로 3개 모터 전부 정상 카운트 확인됨. 그대로 유지
 
 ## 5. 빌드 설정
 

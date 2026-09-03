@@ -8,9 +8,11 @@
 #include "encoder/encoder_pio.h"
 
 static float wheel_speed_from_encoder_delta(int32_t delta_counts, float dt) {
-    // 엔코더는 모터축(기어박스 이전) 기준이라 GEAR_RATIO로 나눠 바퀴 회전수로 변환
-    float motor_revs = (float)delta_counts / ENCODER_COUNTS_PER_REV;
-    float wheel_revs = motor_revs / GEAR_RATIO;
+    // ENCODER_COUNTS_PER_REV는 실측으로 이미 출력축(바퀴축) 1회전 기준 값이라
+    // (핸드오프 문서: "거리 = 카운트/1375 × 바퀴둘레", GEAR_RATIO 안 나눔),
+    // 여기서 GEAR_RATIO로 또 나누면 실제 이동거리를 43.8배 적게 계산하게 된다
+    // (2026-09, "1 1" 줬는데 개멀리 가는 버그로 발견).
+    float wheel_revs = (float)delta_counts / ENCODER_COUNTS_PER_REV;
     float distance_m = wheel_revs * (WHEEL_DIAMETER_M * (float)M_PI);
     return distance_m / dt;
 }
@@ -37,7 +39,8 @@ int main(void) {
         float wheel_speed[NUM_MOTORS];
         for (int i = 0; i < NUM_MOTORS; i++) {
             counts[i] = encoder_get_count(i);
-            wheel_speed[i] = wheel_speed_from_encoder_delta(counts[i] - prev_counts[i], dt);
+            // MOTOR_SIGN: 엔코더가 실제로 측정한 값을 기구학 공식 기준 부호로 맞춘다.
+            wheel_speed[i] = wheel_speed_from_encoder_delta(counts[i] - prev_counts[i], dt) * MOTOR_SIGN[i];
             prev_counts[i] = counts[i];
         }
 
