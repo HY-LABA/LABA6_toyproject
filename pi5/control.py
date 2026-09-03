@@ -167,6 +167,25 @@ def to_target_command(landing_xy: tuple[float, float], origin_odom: tuple[float,
     )
 
 
+def held_target(first: TargetCommand, elapsed_s: float,
+                timeout_s: float | None = None) -> TargetCommand:
+    """★ 테스트 전용 — **첫 예측을 고정한 채** 재전송할 명령을 만든다.
+
+    `main.py --once` 가 쓴다. 목표점(x, y)은 첫 예측 그대로 두고 **남은 시간만 실제로
+    흐른 만큼 깎는다.** 남은 시간까지 얼려버리면 착지 시각이 영영 안 오는 셈이라
+    피코가 감속을 시작하는 시점이 실제와 달라진다 — 고정하고 싶은 건 좌표지 시계가
+    아니다.
+
+    프로덕션 루프는 이 함수를 쓰지 않는다. 매 프레임 새로 푼 예측을 보낸다.
+    """
+    return TargetCommand(
+        target_x=first.target_x,
+        target_y=first.target_y,
+        time_remaining_s=first.time_remaining_s - elapsed_s,
+        timeout_s=first.timeout_s if timeout_s is None else timeout_s,
+    )
+
+
 def to_drive_command(landing_xy: tuple[float, float], time_remaining: float,
                      odometry_xy: tuple[float, float] = (0.0, 0.0),
                      omega: float = 0.0) -> DriveCommand:
