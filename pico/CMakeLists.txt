@@ -28,6 +28,7 @@ target_link_libraries(moving_trash_bin
     hardware_pio
     hardware_pwm
     hardware_gpio
+    hardware_clocks
 )
 
 pico_enable_stdio_usb(moving_trash_bin 1)

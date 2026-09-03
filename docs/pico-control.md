@@ -171,11 +171,11 @@ pico/
 
 `pico/config.h`에 모은다.
 
-### 배선 후 확정
+### 배선 후 확정 — **완료**
 
 | 값 | 방법 |
 |---|---|
-| `MOTOR_PINS[3]` | 모터당 rpwm / lpwm / en / enc_a / enc_b 5핀 ([hardware.md 7장](hardware.md#7-배선)) |
+| `MOTOR_PINS[3]` | **확정.** 모터당 rpwm / lpwm / enc_a / enc_b 4핀 — R_EN/L_EN은 3.3 V 직결이라 GPIO를 안 쓴다 ([hardware.md 7장](hardware.md#7-배선)) |
 | 엔코더 풀업 | 내부 풀업 유지. VCC를 3.3 V에 물리는 것이 전제 ([hardware.md 3.2장](hardware.md#32-엔코더)) |
 
 ### 조립 후 실측

@@ -2,9 +2,11 @@
 
 #include <math.h>
 
+#include "hardware/clocks.h"
 #include "hardware/gpio.h"
 #include "hardware/pwm.h"
 
+// duty 분해능 = PWM_WRAP + 1 = 4096 단계(12비트).
 #define PWM_WRAP 4095
 
 typedef struct {
@@ -17,6 +19,17 @@ static PidState pid_state[NUM_MOTORS];
 static void setup_pwm_pin(int pin) {
     gpio_set_function(pin, GPIO_FUNC_PWM);
     uint slice = pwm_gpio_to_slice_num(pin);
+
+    // PWM 주파수 = sys_clk / ((PWM_WRAP+1) * clkdiv). 분주를 안 걸면 이 보드
+    // (RP2350, 150 MHz)에서 36.6 kHz 가 나와 BTS7960 상한 25 kHz 를 넘는다.
+    // 상수로 박지 않고 실제 클럭에서 역산하는 이유는, 보드나 sys_clk 이 바뀌어도
+    // **벤치에서 검증된 PWM_FREQ_HZ 가 유지되게** 하기 위해서다.
+    // (clkdiv 는 8.4 고정소수점이라 1/16 단위로 반올림된다 — 10 kHz 기준 오차 1% 미만.)
+    float clkdiv = (float)clock_get_hz(clk_sys) / ((float)(PWM_WRAP + 1) * (float)PWM_FREQ_HZ);
+    pwm_set_clkdiv(slice, clkdiv);
+
+    // 한 모터의 rpwm/lpwm 은 같은 슬라이스라 이 함수가 두 번 불린다 — 같은 값을
+    // 다시 쓰는 것뿐이라 무해하다 (config.h 의 핀 배치 주석 참고).
     pwm_set_wrap(slice, PWM_WRAP);
     pwm_set_enabled(slice, true);
 }

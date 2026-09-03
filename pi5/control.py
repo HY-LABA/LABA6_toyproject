@@ -273,10 +273,15 @@ def verify_wheel_config(pico_config: str | None = None) -> list[str]:
         problems.append(f"WHEEL_MOUNT_RADIUS_M 불일치: pi5={config.WHEEL_MOUNT_RADIUS_M} "
                         f"pico={m.group(1)}")
 
-    m = re.search(r"#define\s+MAX_BODY_SPEED_MPS\s+([0-9.]+)f?", text)
-    if m and abs(float(m.group(1)) - config.WHEEL_MAX_SPEED_MPS) > 1e-6:
-        problems.append(f"속도 한계 불일치: pi5 WHEEL_MAX_SPEED_MPS="
-                        f"{config.WHEEL_MAX_SPEED_MPS} pico MAX_BODY_SPEED_MPS={m.group(1)}")
+    # 이름이 없으면 **불일치를 못 잡고 조용히 통과한다.** 그래서 못 찾은 것 자체를
+    # 문제로 보고한다 — 피코에서 상수 이름이 바뀌면 여기가 먼저 시끄러워야 한다.
+    for name, expected in (("WHEEL_MAX_SPEED_MPS", config.WHEEL_MAX_SPEED_MPS),
+                           ("POSITION_TOLERANCE_M", config.POSITION_TOLERANCE_M)):
+        m = re.search(rf"#define\s+{name}\s+([0-9.]+)f?", text)
+        if not m:
+            problems.append(f"pico/config.h 에서 {name} 를 못 읽었다")
+        elif abs(float(m.group(1)) - expected) > 1e-6:
+            problems.append(f"{name} 불일치: pi5={expected} pico={m.group(1)}")
     return problems
 
 

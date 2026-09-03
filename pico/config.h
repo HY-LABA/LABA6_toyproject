@@ -26,13 +26,21 @@ static const MotorPins MOTOR_PINS[NUM_MOTORS] = {
 #define GEAR_RATIO 43.8f      // FIT0186
 #define MOTOR_RATED_RPM 251.0f  // FIT0186 무부하 @12V
 
-// body frame 최대 속도(m/s). 물리적으로 불가능한 목표가 들어오면 PID가 영구
-// 포화되고, 그러면 세 바퀴의 속도 비율이 깨져서 진행 방향까지 틀어진다.
+// 바퀴 **하나**가 낼 수 있는 최대 림 속도(m/s).
+//
+// ★ body 속도 상한이 아니라 **바퀴 속도 상한**이다 (옛 이름 MAX_BODY_SPEED_MPS).
+//   모터가 제한하는 건 바퀴 속도다. 3륜 옴니는 진행 방향에 따라 body 1 m/s 를 내는
+//   데 필요한 최대 바퀴 속도가 0.866~1.000 으로 다르다. body 속력을 상수 하나로
+//   자르면 유리한 방향에서 13.4% 를 버리고, 그러면 파이의 `tracker._reach()` 가
+//   그만큼 낙관해서 **못 잡을 표적을 쫓는다.** 그래서 클램프는 방향별로 계산한다
+//   (`kinematics.c: max_body_speed()`, pi5 `control.max_body_speed()` 와 같은 식).
+//
 // FIT0186 기준: 251 RPM 무부하에 부하 감쇠 92.5%를 반영해 232 RPM,
 //   (232/60) 회전/초 × π × 0.1m ≈ 1.22 m/s  (docs/physics.md 0장·3장)
 // ⚠ 정해야함: 실측. 모터 도착 후 PWM 100%로 직진시켜 엔코더 속도가 평평해지는
-//   값을 넣고, pi5/config.py의 ROBOT_MAX_SPEED_MPS도 같은 값으로 맞출 것.
-#define MAX_BODY_SPEED_MPS 1.22f
+//   값을 넣고, pi5/config.py의 WHEEL_MAX_SPEED_MPS 도 같은 값으로 맞출 것
+//   (control.verify_wheel_config() 가 이 이름을 파싱해 대조한다).
+#define WHEEL_MAX_SPEED_MPS 1.22f
 
 // 바퀴 장착각(rad). **pi5/config.py 의 WHEEL_ANGLES_RAD 와 반드시 같아야 한다**
 // (control.verify_wheel_config() 가 이 파일을 직접 읽어 대조한다).
@@ -90,11 +98,28 @@ typedef struct {
 
 // MicroPython 벤치 테스트(2026-09)에서 확인된 값. 목표 근처 저속 구간에서
 // Ki=0이면 정지마찰을 못 이기고 영원히 멈추는 문제가 있어서 Ki를 넣었다.
+//
+// ⚠⚠ **단위가 벤치와 다르다 — 벤치값을 100으로 나눈 것이 여기 값이다.** ⚠⚠
+//   벤치(goto_xy_test.py)의 PID 출력은 `set_motor(speed_pct)` 가 받는 **duty 퍼센트
+//   (-100~+100)** 였고 게인이 {60, 40} 이었다. C 의 `set_pwm()` 은 **duty 비율(0~1)**
+//   을 받으므로 같은 제어를 하려면 게인도 1/100 이어야 한다.
+//   60 을 그대로 쓰면 속도 오차 1/60 = 0.017 m/s 만 넘어도 duty 가 100% 로 포화돼
+//   비례 제어가 아니라 **사실상 온/오프(뱅뱅) 제어**가 된다 — 목표 근처에서 앞뒤로
+//   때리며 떨고 전류도 튄다.
+//   (MIN_DRIVE_DUTY 15.0→0.15 와 안티와인드업 100/ki→1/ki 는 이미 환산돼 있어서,
+//    게인까지 환산해야 벤치와 완전히 같은 제어가 된다.)
 static const PidGains MOTOR_PID[NUM_MOTORS] = {
-    {60.0f, 40.0f, 0.0f},
-    {60.0f, 40.0f, 0.0f},
-    {60.0f, 40.0f, 0.0f},
+    {0.6f, 0.4f, 0.0f},
+    {0.6f, 0.4f, 0.0f},
+    {0.6f, 0.4f, 0.0f},
 };
+
+// PWM 반송 주파수. **벤치에서 검증된 값이다** (goto_xy_test.py: PWM_FREQ_HZ).
+// BTS7960 상한은 25 kHz 이고, 저속 구간 선형성을 위해 그보다 낮은 10 kHz 를 골랐다.
+// ⚠ 분주를 안 걸면 이 보드(pico2_w = RP2350, 150 MHz)에서 150e6/4096 ≈ 36.6 kHz 로
+//   **드라이버 상한을 넘는다.** motor_control.c 가 실제 시스템 클럭에서 분주를
+//   역산하므로 클럭이나 보드가 바뀌어도 주파수는 유지된다.
+#define PWM_FREQ_HZ 10000
 
 // 목표 속도가 0이 아닌데 계산된 duty가 이보다 작으면 이 값까지 끌어올린다
 // (0~1 스케일, motor_control.c의 set_pwm과 동일 단위). 정지마찰 못 이기고

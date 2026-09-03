@@ -43,3 +43,25 @@ void forward_kinematics(const float wheel[3], float *vx, float *vy, float *omega
     *vy = inv[1][0] * wheel[0] + inv[1][1] * wheel[1] + inv[1][2] * wheel[2];
     *omega = inv[2][0] * wheel[0] + inv[2][1] * wheel[1] + inv[2][2] * wheel[2];
 }
+
+float max_body_speed(float vx, float vy, float omega) {
+    float n = sqrtf(vx * vx + vy * vy);
+    if (n < 1e-9f) {
+        return WHEEL_MAX_SPEED_MPS;
+    }
+
+    // 단위 속도로 갔을 때의 바퀴 속도를 구하고, 그 중 가장 큰 것이 바퀴 한계에
+    // 닿는 지점이 곧 이 방향의 body 속력 상한이다.
+    float w[3];
+    inverse_kinematics(vx / n, vy / n, (omega != 0.0f) ? omega / n : 0.0f, w);
+
+    float peak = 0.0f;
+    for (int i = 0; i < 3; i++) {
+        float a = fabsf(w[i]);
+        if (a > peak) peak = a;
+    }
+    if (peak < 1e-9f) {
+        return WHEEL_MAX_SPEED_MPS;
+    }
+    return WHEEL_MAX_SPEED_MPS / peak;
+}

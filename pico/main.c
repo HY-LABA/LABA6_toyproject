@@ -93,11 +93,18 @@ int main(void) {
             float dist = sqrtf(rx * rx + ry * ry);
 
             if (dist > POSITION_TOLERANCE_M) {
+                // 상한은 **이 방향에서** 바퀴가 포화되지 않는 값이다. 방향에 따라
+                // 1.22~1.41 m/s 로 다르고, 파이의 tracker._reach() 가 믿는 값도
+                // 이것이다 (docs/protocol.md 2장의 ⚠ 상자).
+                float limit = max_body_speed(rx, ry, 0.0f);
                 // 남은거리 ÷ 남은시간 — 목표에 가까워질수록 속도가 저절로 줄어서
                 // 별도 감속 프로파일 없이 P 제어가 감속기 역할을 한다.
-                float v = (time_remaining_s > 0.0f) ? (dist / time_remaining_s) : MAX_BODY_SPEED_MPS;
-                if (v > MAX_BODY_SPEED_MPS) {
-                    v = MAX_BODY_SPEED_MPS;
+                // 남은시간이 0 이하면 이미 착지 시각을 지난 것이라 최대로 붙는다.
+                // (0 이 아니라 1e-3 으로 거르는 건 아주 작은 양수로 나눠 v 가
+                //  발산하는 걸 막기 위해서다 — 어차피 아래에서 잘리지만.)
+                float v = (time_remaining_s > 1e-3f) ? (dist / time_remaining_s) : limit;
+                if (v > limit) {
+                    v = limit;
                 }
                 target_vx = (rx / dist) * v;
                 target_vy = (ry / dist) * v;
@@ -113,11 +120,18 @@ int main(void) {
         // 파이 쪽 버그로 말도 안 되는 값이 들어오면 PID가 영구 포화되고, 그 상태에선
         // 세 바퀴의 속도 비율이 깨져서 크기만이 아니라 **진행 방향까지** 틀어진다.
         // 그래서 크기만 깎고 방향은 보존한다.
+        //
+        // ★ 상한이 방향별이다. 예전엔 상수(1.22)로 잘랐는데, 모터가 제한하는 건
+        //   body 속도가 아니라 바퀴 속도라 유리한 방향(0°/90°…)에서 실제로 낼 수
+        //   있는 1.41 m/s 를 버리고 있었다. 텔레옵(속도 명령) 경로도 여기를 탄다.
         float speed = sqrtf(target_vx * target_vx + target_vy * target_vy);
-        if (speed > MAX_BODY_SPEED_MPS) {
-            float scale = MAX_BODY_SPEED_MPS / speed;
-            target_vx *= scale;
-            target_vy *= scale;
+        if (speed > 1e-9f) {
+            float limit = max_body_speed(target_vx, target_vy, target_omega);
+            if (speed > limit) {
+                float scale = limit / speed;
+                target_vx *= scale;
+                target_vy *= scale;
+            }
         }
 
         float wheel_target[NUM_MOTORS];
