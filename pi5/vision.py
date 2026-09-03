@@ -1,10 +1,6 @@
-"""카메라 캡처 + YOLO 검출 → **bbox 중심 픽셀 좌표**.
+"""
+카메라 캡처 + YOLO 검출 → **bbox 중심 픽셀 좌표**.
 
-궤적 추정이 중력 기반이라 여기서 필요한 건 bbox 중심 하나뿐이다. 깊이도 속도도
-궤적 최소제곱의 해에 같이 나오므로(`trajectory.Fit`) 여기서 계산하지 않는다.
-
-bbox **크기**는 아무 데도 안 쓴다 — 회전하는 물체에서 폭이 흔들리는 문제가 통째로
-사라진다. 다만 중심 좌표의 정확도는 그대로 중요하다. 궤적 피팅의 유일한 입력이다.
 """
 
 from __future__ import annotations
@@ -19,7 +15,6 @@ import utils
 
 @dataclass
 class Detection:
-    """한 프레임에서 찾은 물체. bbox는 로그·디버깅용으로만 남겨둔다."""
 
     u: float                # bbox 중심 x (px, 왜곡 보정 후)
     v: float                # bbox 중심 y (px, 왜곡 보정 후)
@@ -54,8 +49,8 @@ class Camera:
             sys.path.insert(0, prep_dir)
         import camera as camlib  # prep/camera.py
 
-        # config.CAMERA_RESOLUTION/FPS는 프로파일 값과 같아야 한다 — 카메라를
-        # 바꾸면 prep/camera.py에 새 프로파일을 추가하고 DEFAULT도 옮길 것.
+        # config.CAMERA_RESOLUTION/FPS는 프로파일 값과 같아야 한다 
+        # 카메라를 바꾸면 prep/camera.py에 새 프로파일을 추가하고 DEFAULT도 옮길 것.
         profile = camlib.DEFAULT
         spec = camlib.SPECS[profile]
         if (spec.width, spec.height) != tuple(resolution) or spec.fps != fps:
@@ -64,7 +59,7 @@ class Camera:
                   f"({spec.width}x{spec.height}@{spec.fps})와 다르다 — "
                   f"prep/camera.py의 SPECS나 config.py를 확인할 것.")
 
-        # backend="picamera2" 고정 — 실기에서 웹캠으로 조용히 폴백되면 안 된다.
+        # backend="picamera2" 고정
         self._cam = camlib.open_camera(profile=profile, backend="picamera2")
 
     def capture(self) -> tuple[np.ndarray, float]:
@@ -198,7 +193,6 @@ _yolo: _HailoYolo | None = None
 
 
 def _model_path() -> str:
-    """쓸 .hef 경로. 환경변수 TRASH_HEF 가 있으면 그게 이긴다."""
     import os
 
     return os.environ.get("TRASH_HEF") or config.YOLO_MODEL_PATH
@@ -211,8 +205,6 @@ def _get_yolo() -> _HailoYolo:
 
         path = _pl.Path(_model_path()).expanduser()
         if not path.is_file():
-            # .hef 는 git에 안 들어가므로(용량) **브랜치를 받아도 안 따라온다.**
-            # 여기서 헤매지 않게 어디서 구하는지까지 적어둔다.
             raise FileNotFoundError(
                 f"Hailo 모델을 못 찾았다: {path}\n"
                 f"  .hef 는 .gitignore 대상이라 git으로 안 따라온다. 직접 복사해야 한다:\n"
@@ -227,7 +219,7 @@ def _undistort(u: float, v: float) -> tuple[float, float]:
     """렌즈 왜곡을 보정해 이상적인 핀홀 좌표로 옮긴다.
 
     **이미지 전체를 펴지 않고 점 하나만 보정한다.** 40fps로 프레임을 통째로
-    undistort하는 건 파이 입장에서 낭비다 — 프레임당 의미 있는 픽셀이 한 점뿐이다.
+    undistort하는 건 파이 입장에서 낭비
 
     LS40136은 M12 광각 렌즈다. 화각이 넓으면 왜곡이 가장자리에서 커지고, 궤적
     피팅은 화면 전체를 가로지르는 궤적을 쓰므로 보정 없이는 잔차가 계통적으로
@@ -255,7 +247,6 @@ def _undistort(u: float, v: float) -> tuple[float, float]:
 def detect_all(frame: object, t: float) -> list[Detection]:
     """한 프레임의 **모든** 검출 (신뢰도 임계값 통과분). 신뢰도 내림차순.
 
-    ★ 하나만 돌려주면 안 되는 이유:
       YOLO가 에어컨·공유기·조명을 오탐할 때, 그게 진짜 쓰레기보다 **높은 신뢰도**를
       받는 경우가 있다. 최고점 하나만 쓰면 그 프레임에서 진짜 물체는 아예 안 보이고,
       오탐 좌표가 트랙에 섞인다. 합성 검증에서 25프레임 중 2프레임만 오염돼도
@@ -281,7 +272,6 @@ def detect_all(frame: object, t: float) -> list[Detection]:
 
 def detect(frame: object, t: float) -> Detection | None:
     """가장 신뢰도 높은 검출 하나. **게이팅을 안 쓸 때만** 의미가 있다.
-
     실제 구동 루프는 `detect_all` + `TrackerPool`을 쓴다. 이 함수는 단독 디버깅용.
     """
     hits = detect_all(frame, t)

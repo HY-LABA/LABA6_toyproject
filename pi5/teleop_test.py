@@ -109,10 +109,10 @@ def main() -> int:
             if args.invert_y:
                 y = -y
 
-            # 스틱 위(-1)를 전진으로 본다. body frame 실제 정의(+x가 어느 쪽인지)는
-            # pico 배선을 봐야 확정되므로, 로봇이 엉뚱한 방향으로 가면 --invert-*/--swap-xy로 맞출 것.
-            target_vx = -y * args.max_speed
-            target_vy = x * args.max_speed
+            # body frame: +X = 로봇 우측, +Y = 로봇 전방(M1). 스틱 위(-1)가 전진이다.
+            # 배선이 뒤바뀌어 로봇이 엉뚱하게 가면 --invert-*/--swap-xy 로 맞출 것.
+            target_vx = x * args.max_speed          # 스틱 우 → +X (우측)
+            target_vy = -y * args.max_speed         # 스틱 위 → +Y (전방)
 
             cmd = control.DriveCommand(target_vx=target_vx, target_vy=target_vy,
                                         timeout_s=config.DRIVE_TIMEOUT_S)

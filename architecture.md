@@ -1,7 +1,8 @@
 # 소프트웨어 아키텍처
 
 > 2026-08-10 개정. 깊이 추정 방식 전환(크기비율 → 중력 기반 궤적 최소제곱)과 파이5↔피코
-> 프로토콜 변경(좌표 → 속도)을 반영했다. 알고리즘 자체는 `algorithm.md` 참고.
+> 프로토콜은 **월드 좌표 목표점 전송**이다(파이5 완료, 피코 미반영). 계약은
+> `docs/protocol.md`, 알고리즘 자체는 `algorithm.md` 참고.
 
 ## 1. 파일 구조
 
@@ -19,7 +20,7 @@ LABA6_toyproject/
 │   ├── vision.py                 # 카메라 캡처 + YOLO → bbox 중심 + 왜곡보정
 │   ├── trajectory.py             # ★ 중력 기반 궤적 최소제곱 + 착지 예측 + Tracker
 │   ├── fisheye.py                # 어안 → 핀홀 등가 좌표 변환
-│   ├── control.py                # 남은거리÷남은시간 → 목표 속도 (+ 최대속도 클램프)
+│   ├── control.py                # 착지점 → 월드 좌표 목표점 (+ 도달판정·로그용 속도 예측)
 │   ├── communication.py          # USB 시리얼 프레임 인코딩/디코딩 (pyserial 연결 완료)
 │   ├── utils.py                  # 로깅 + 타이밍
 │   ├── teleop_test.py            # Xbox 컨트롤러로 body-frame vx/vy 직접 전송 — 피코 브링업 테스트
@@ -71,14 +72,14 @@ LABA6_toyproject/
 
 | 파일 | 담당 기능 |
 |---|---|
-| `main.py` | 프레임 단위 루프 하나로 전체를 돌린다: 캡처→검출→관측 누적→재피팅→착지 예측→오도메트리 수신→목표 속도 전송. 물체를 `TRACK_MAX_GAP_S` 이상 놓치면 트랙을 리셋하고 로봇을 세운다. 어떤 경로로 빠져나가도 `finally`에서 정지 명령을 보낸다 |
+| `main.py` | 프레임 단위 루프 하나로 전체를 돌린다: 캡처→검출→관측 누적→재피팅→착지 예측→오도메트리 수신→**월드 좌표 목표점 전송**. 물체를 `TRACK_MAX_GAP_S` 이상 놓치면 트랙을 리셋하고 로봇을 세운다. 어떤 경로로 빠져나가도 `finally`에서 정지 명령을 보낸다 |
 | `config.py` | 카메라 내부파라미터(`CAMERA_FX/FY/CX/CY`, 왜곡, 모델), 해상도·fps, YOLO 경로·임계값·단일 클래스, 궤적 파라미터(`MIN_OBSERVATIONS`, `MIN_TIME_SPAN_S`, `MAX_RESIDUAL_PX`, `DEPTH_STABILITY_RATIO`, `Z_RANGE_M`), 로봇 최대속도·워치독·도착 허용오차, 시리얼 설정. **실측으로 정한 값에는 근거 표가 주석으로 붙어 있다** |
 | `vision.py` | ① Picamera2 캡처 (센서 타임스탬프 사용 — 파이썬 수신 시각은 스케줄링 지터가 섞여 궤적 피팅이 그걸 운동으로 읽는다) ② Hailo NPU로 YOLO 추론 ③ 신뢰도 최고 검출 하나의 **bbox 중심**만 취함 ④ `cv2.undistortPoints`로 그 **점 하나만** 왜곡 보정 (프레임 전체를 펴는 건 낭비다). bbox 크기는 로그용으로만 남긴다 |
 | `trajectory.py` | ★ 핵심. `fit_trajectory`(2N×6 선형 최소제곱으로 위치·속도 6개 동시 추정), `landing_time`/`predict_landing`(캐치 평면 통과 시각·좌표), `Tracker`(관측 누적 + 매 프레임 재피팅 + **깊이 수렴 판정**). 좌표계 정의도 이 파일 상단에 있다 |
-| `control.py` | 착지점 − 오도메트리 = 남은 거리, 나누기 남은 시간 = 목표 속도. 최대속도 초과 시 **크기만 깎고 방향은 보존**(포화 상태에서는 세 바퀴 속도 비율이 깨져 진행 방향까지 틀어진다). 도착 허용오차 안이면 정지 |
+| `control.py` | 착지점(트랙 원점 기준) + 트랙 시작 시점 오도메트리 = **월드 좌표 목표점**. 남은 거리를 빼는 것도 속도를 만드는 것도 피코가 한다 — 파이가 미리 빼면 두 번 빠진다. 여기 남은 속도 계산(`to_drive_command`)은 도달 판정과 로그용 **예측**이다 |
 | `communication.py` | `[START 0xAA][LEN][PAYLOAD][CHECKSUM]` 프레임. 수신은 **논블로킹**이고 버퍼에 쌓인 것 중 최신만 쓴다 — 여기서 기다리면 카메라 프레임을 놓치고 그건 곧 관측 손실이다 |
 | `utils.py` | `run.log` append + 콘솔 동시 출력. `log_cycle`이 한 사이클의 판단 근거(관측수, 잔차, 깊이, 착지점, 남은시간, 오도메트리, 명령)를 한 줄로 남긴다 — 예측이 이상할 때 "궤적이 안 맞나(잔차↑) 관측이 부족한가(n↓)"를 로그만으로 구분하기 위함 |
-| `teleop_test.py` | Xbox 컨트롤러 왼쪽 스틱으로 body-frame `target_vx/vy`를 직접 전송. 카메라/YOLO 없이 피코 모터 응답만 먼저 검증할 수 있다. body frame의 실제 +x 방향은 아직 미확정(카메라 장착 방향에 달림) — `--invert-*`/`--swap-xy`로 대응 |
+| `teleop_test.py` | Xbox 컨트롤러 왼쪽 스틱으로 body-frame `target_vx/vy`를 직접 전송(12 B 속도 프레임). 카메라/YOLO 없이 피코 모터 응답만 먼저 검증할 수 있다. 스틱 우=+X(우측), 스틱 위=+Y(전방, M1). 배선이 뒤바뀌면 `--invert-*`/`--swap-xy`로 대응 |
 | `yolo_to_csv.py` | (신규, 오프라인 검증용) 녹화 영상 + YOLO 가중치 → 프레임별 `(frame,t,u,v,conf)` CSV. **무거운 YOLO 추론만 담당**하고 궤적 계산은 안 한다 — Colab에서 돌리는 용도 |
 | `predict_trajectory.py` | (신규, 오프라인 검증용) 그 CSV를 `trajectory.Tracker`에 실시간과 같은 순서로 먹여서 착지 예측 재현. `cv2`/`ultralytics` 불필요(가벼움) — 로컬 PC에서 게이트값(`--min-time-span`/`--depth-ratio`) 바꿔가며 반복 실행하는 용도. `vision._undistort`와 동일한 왜곡보정 로직을 내장 |
 
@@ -162,7 +163,8 @@ LABA6_toyproject/
 
 | 방향 | PAYLOAD | 크기 |
 |---|---|---|
-| 파이5 → 피코 | `<fff>` target_vx, target_vy, timeout_s | 12 B |
+| 파이5 → 피코 ① | `<ffff>` target_x, target_y, time_remaining_s, timeout_s (월드 좌표) | 16 B |
+| 파이5 → 피코 ② | `<fff>` target_vx, target_vy, timeout_s (텔레옵·정지) | 12 B |
 | 피코 → 파이5 | `<ffffff>` x, y, theta, vx, vy, omega | 24 B |
 
 상세는 [`docs/protocol.md`](docs/protocol.md).

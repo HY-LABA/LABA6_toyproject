@@ -36,17 +36,24 @@ def log_detection(confidence: float, bbox, uv) -> None:
         f"({uv[0]:.1f},{uv[1]:.1f}) size=({w:.1f}x{h:.1f})")
 
 
-def log_cycle(fit, landing_xy, time_remaining: float, odom_xy, cmd) -> None:
+def log_cycle(fit, landing_xy, time_remaining: float, odom_xy, cmd, target=None) -> None:
     """한 사이클의 결정 근거를 한 줄로.
 
     잔차(resid)와 관측 수(n)를 같이 찍는 게 중요하다. 예측이 이상할 때
     "궤적이 안 맞는 건지(resid 큼) 관측이 부족한 건지(n 작음)"를 로그만 보고
     구분할 수 있어야 한다.
+
+    `landing`은 트랙 원점 기준, `target`은 실제로 보낸 **월드 좌표**다. 둘을 같이
+    찍어야 "예측이 틀린 건지 좌표 변환이 틀린 건지"를 로그만 보고 가를 수 있다.
+    `cmd`는 피코가 낼 속도의 **예측치**이지 보낸 값이 아니다.
     """
-    log(f"fit n={fit.n} resid={fit.residual_px:.2f}px z={fit.p0[2]:.2f}m "
-        f"| landing=({landing_xy[0]:+.3f},{landing_xy[1]:+.3f}) t_rem={time_remaining:.3f}s "
-        f"| odom=({odom_xy[0]:+.3f},{odom_xy[1]:+.3f}) "
-        f"| cmd=({cmd.target_vx:+.2f},{cmd.target_vy:+.2f}) {cmd.speed:.2f}m/s")
+    line = (f"fit n={fit.n} resid={fit.residual_px:.2f}px z={fit.p0[2]:.2f}m "
+            f"| landing=({landing_xy[0]:+.3f},{landing_xy[1]:+.3f}) t_rem={time_remaining:.3f}s "
+            f"| odom=({odom_xy[0]:+.3f},{odom_xy[1]:+.3f}) ")
+    if target is not None:
+        line += f"| target=({target.target_x:+.3f},{target.target_y:+.3f}) "
+    line += f"| v_pred=({cmd.target_vx:+.2f},{cmd.target_vy:+.2f}) {cmd.speed:.2f}m/s"
+    log(line)
 
 
 def timestamp() -> float:
