@@ -34,12 +34,21 @@ static void setup_pwm_pin(int pin) {
     pwm_set_enabled(slice, true);
 }
 
-void motor_control_init(void) {
-    // R_EN/L_EN은 3.3V에 직결돼 있어 GPIO로 켤 필요가 없다 (config.h 참고).
+void motor_control_reset(void) {
+    // 모드가 바뀌면 이전 모드에서 쌓인 적분항은 의미가 없다. 남겨두면:
+    //   ki=0.4, 안티와인드업 한계 1/ki=2.5 -> 적분항만으로 duty 0.4*2.5 = 1.0(100%).
+    // 즉 **정지해 있던 로봇이 다음 명령 첫 틱에 전력으로 튀어나갈 수 있다.**
+    // 벤치(goto_xy_test.py)는 `drive_to()` 진입마다 `pid_reset()` 을 불렀다.
     for (int i = 0; i < NUM_MOTORS; i++) {
         pid_state[i].integral = 0.0f;
         pid_state[i].prev_error = 0.0f;
+    }
+}
 
+void motor_control_init(void) {
+    // R_EN/L_EN은 3.3V에 직결돼 있어 GPIO로 켤 필요가 없다 (config.h 참고).
+    motor_control_reset();
+    for (int i = 0; i < NUM_MOTORS; i++) {
         setup_pwm_pin(MOTOR_PINS[i].rpwm);
         setup_pwm_pin(MOTOR_PINS[i].lpwm);
     }

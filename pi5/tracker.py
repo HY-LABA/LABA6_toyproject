@@ -59,6 +59,34 @@ import trajectory as traj
 IDLE, TRACKING, COOLDOWN = "IDLE", "TRACKING", "COOLDOWN"
 
 
+# ── 좌표계 경계 ────────────────────────────────────────────────────────────
+# `trajectory.py` 는 **카메라 이미지 축**(X=화면 우, Y=화면 아래)으로 푼다.
+# 오도메트리·역기구학·`control` 은 **로봇 body 축**(+X=우측, +Y=전방)을 쓴다.
+# 그 사이의 회전이 `config.CAMERA_YAW_RAD` 이고, 두 축이 만나는 지점은
+# 이 파일의 딱 두 곳뿐이다:
+#
+#   robot -> cam :  Tracker._cam_xy()   피팅 입력(`cams`)을 만들 때
+#   cam -> robot :  Tracker.landing()   착지 예측을 내보낼 때
+#
+# 이 두 곳만 지키면 `tracker` 바깥(`control`, `main`)은 전부 로봇 축이고,
+# `trajectory` 안은 전부 카메라 축이라 섞일 수가 없다.
+
+
+def _rot(x: float, y: float, ang: float) -> tuple[float, float]:
+    c, s = math.cos(ang), math.sin(ang)
+    return (c * x - s * y, s * x + c * y)
+
+
+def cam_to_robot(x: float, y: float) -> tuple[float, float]:
+    """카메라 이미지 축 -> 로봇 body 축."""
+    return _rot(x, y, config.CAMERA_YAW_RAD)
+
+
+def robot_to_cam(x: float, y: float) -> tuple[float, float]:
+    """로봇 body 축 -> 카메라 이미지 축."""
+    return _rot(x, y, -config.CAMERA_YAW_RAD)
+
+
 # ── 가설 하나 ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -84,19 +112,26 @@ class Tracker:
 
     started_at: float | None = None       # 이 가설의 첫 관측 시각
     last_seen: float | None = None        # 마지막으로 관측이 붙은 시각
+    fit_at: float | None = None           # self.fit 을 마지막으로 **갱신**한 관측 시각
     origin_odom: tuple[float, float] = (0.0, 0.0)   # ★ 첫 관측 시점의 오도메트리
     _first_shown: bool = field(default=False, repr=False)
 
     # ── 좌표 ──────────────────────────────────────────────────────────────
     def _cam_xy(self, odom_xy) -> tuple[float, float]:
-        """이 가설의 원점 기준 **카메라 광학중심** 위치.
+        """이 가설의 원점 기준 **카메라 광학중심** 위치 — **카메라 축**으로 돌려서.
 
         로봇 회전중심이 아니라 카메라 위치여야 한다 — 관측 (u,v)를 만든 게 카메라이기
         때문이다. `CAMERA_OFFSET_M`은 통 입구 림에 단 카메라가 회전중심에서 떨어진 양.
+
+        ★ 오도메트리도 CAMERA_OFFSET_M 도 **로봇 body 축**이다. 그런데 이 값이
+          들어가는 `trajectory.fit_trajectory(cams=...)` 는 **카메라 축**으로 푼다.
+          그래서 로봇 축에서 더한 뒤 마지막에 한 번 회전시킨다 (`robot_to_cam`).
+          예전에는 이 회전이 없어서 두 축을 그냥 섞고 있었다.
         """
         ox, oy = config.CAMERA_OFFSET_M
-        return (odom_xy[0] - self.origin_odom[0] + ox,
-                odom_xy[1] - self.origin_odom[1] + oy)
+        rx = odom_xy[0] - self.origin_odom[0] + ox      # 로봇 body 축
+        ry = odom_xy[1] - self.origin_odom[1] + oy
+        return robot_to_cam(rx, ry)                     # -> 카메라 축
 
     def moved_since_start(self, odom_xy) -> tuple[float, float]:
         """이 가설이 시작된 뒤 **로봇 중심**이 이동한 양.
@@ -109,7 +144,14 @@ class Tracker:
 
     # ── 누적 ──────────────────────────────────────────────────────────────
     def add(self, det, odom_xy, now: float) -> traj.Fit | None:
-        """관측 하나를 누적하고 갱신된 fit을 돌려준다. 아직 못 믿으면 None."""
+        """관측 하나를 누적하고 **새로 푼** fit을 돌려준다. 못 믿으면 None.
+
+        ★ 반환이 None이어도 `self.fit`은 남아 있을 수 있다 (`config.FIT_HOLD_S`).
+          예전에는 맨 앞에서 `self.fit = None`을 해서, 게이트를 한 프레임만 못 넘겨도
+          그 가설이 통째로 `viable`이 아니게 되고 그 프레임엔 피코로 명령이 아예
+          안 나갔다. 워치독이 0.15s라 몇 번 겹치면 로봇이 가다 선다.
+          그래서 직전 해를 짧게 들고 간다 — 자세한 근거는 config.FIT_HOLD_S 주석.
+        """
         if self.started_at is None:
             self.started_at = det.t
             self.origin_odom = tuple(odom_xy)      # ★ 이 가설의 좌표 원점
@@ -121,7 +163,26 @@ class Tracker:
         if len(self.times) > config.TRACK_WINDOW:
             del self.times[0], self.uvs[0], self.cams[0]
 
-        self.fit = None
+        fit = self._solve()
+        if fit is not None:
+            self.fit = fit
+            self.fit_at = det.t
+            return fit
+
+        # 이번 프레임은 못 풀었다. 직전 해를 FIT_HOLD_S 까지만 들고 가고,
+        # 그걸 넘겼으면 버린다 — 노이즈 한 번이 아니라 뭔가 진짜 잘못된 것이다.
+        if (self.fit is not None and self.fit_at is not None
+                and det.t - self.fit_at > config.FIT_HOLD_S):
+            self.fit = None
+            self.fit_at = None
+        return None
+
+    def _solve(self) -> traj.Fit | None:
+        """지금 쌓인 관측으로 푼다. 게이트를 하나라도 못 넘기면 None.
+
+        `add()`에서 갈라낸 이유는 "푸는 것"과 "직전 해를 얼마나 들고 갈 것인가"가
+        서로 다른 결정이기 때문이다.
+        """
         if self.n < config.MIN_OBSERVATIONS:
             return None
         if self.time_span < config.MIN_TIME_SPAN_S:
@@ -149,12 +210,10 @@ class Tracker:
         # 프레임들이 이어서 보정한다.
         if not self._first_shown:
             self._first_shown = True
-            self.fit = fit
             return fit
 
         if not self._depth_converged(fit):
             return None
-        self.fit = fit
         return fit
 
     def _depth_converged(self, fit: traj.Fit) -> bool:
@@ -196,8 +255,13 @@ class Tracker:
     def landing(self):
         """(x, y, 남은시간) 또는 None.
 
-        x, y는 **이 가설이 시작된 시점의 로봇 중심**을 원점으로 한 월드 좌표다.
-        카메라 오프셋은 `_cam_xy`에서 이미 반영됐으므로 여기서 또 빼면 안 된다.
+        x, y는 **이 가설이 시작된 시점의 로봇 중심**을 원점으로 한, **로봇 body 축**
+        좌표다. 카메라 오프셋은 `_cam_xy`에서 이미 반영됐으므로 여기서 또 빼면 안 된다.
+
+        ★ `trajectory` 가 돌려주는 건 **카메라 축**이므로 여기서 로봇 축으로 돌린다
+          (`cam_to_robot`). 이 함수 바깥(`_reach`, `control.to_target_command`,
+          `control.to_drive_command`)은 전부 로봇 축 세계다 — 거기서 오도메트리와
+          더하고 빼는 게 그래서 성립한다.
         """
         if self.fit is None:
             return None
@@ -205,6 +269,7 @@ class Tracker:
         if out is None:
             return None
         x, y, dt_from_t0 = out
+        x, y = cam_to_robot(x, y)           # 카메라 축 -> 로봇 body 축
         # 남은 시간은 마지막 관측 시각 기준으로 환산해 준다 —
         # 호출부는 "지금부터 몇 초 남았나"로 판단해야 하기 때문.
         return x, y, self.fit.t0 + dt_from_t0 - self.times[-1]

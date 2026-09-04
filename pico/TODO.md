@@ -80,16 +80,37 @@ MicroPython 벤치 테스트(`pico_micropython/goto_xy_test.py`, 2026-09)로 아
       이미 바퀴축 기준이라 또 나누면 안 됨)
 - [x] `motor_control.c` — PID output → PWM 듀티 스케일 (MicroPython 벤치값으로 확정,
       안티와인드업·데드밴드 보상도 같이 이식). **게인 단위 환산은 1번 항목 참고**
-- [ ] **`communication_send_odometry`의 블로킹** — `putchar_raw`는 호스트가 안 읽으면
-      블로킹한다. 제어 루프에서 걸리면 모터가 마지막 듀티로 계속 돈다.
-      `CONTROL_PERIOD_MS`가 20ms라 송신이 50Hz라서 지금은 대역폭 문제는 없지만
-      (docs/protocol.md 4장이 권하는 100Hz 데시메이션이 불필요), 블로킹 자체는 남아
-      있다 — `tud_cdc_write_available()`로 여유를 확인하고 없으면 그 프레임을 버릴 것.
-      ⚠ 제어 주기를 다시 1kHz로 올리면 **데시메이션도 같이 넣어야 한다**
-- [ ] `odometry_kalman.c`의 `PROCESS_NOISE`/`MEASURE_NOISE` — 스무딩 정도
+- [x] **`communication_send_odometry`의 블로킹** (2026-09-04, 다른 세션 작업) —
+      `tud_cdc_connected()` + `tud_cdc_write_available()`로 여유 확인 후 부족하면
+      그 프레임을 건너뛰도록 수정. `communication_try_receive()`도 프레임 하나에서
+      바로 return하지 않고 버퍼를 끝까지 비워 **마지막 완전 프레임만** 채택하게 바뀜
+      (파이 쪽 `try_receive_odometry()`와 같은 방침)
+- [x] `odometry_kalman.c`의 `PROCESS_NOISE`/`MEASURE_NOISE` (2026-09-04, 다른 세션 작업) —
+      파라미터를 재튜닝하는 대신 **pose 적분을 raw 속도로 되돌렸다.** 이 조합(Q=0.01,
+      R=1.0, dt=0.02)의 칼만 시정수가 약 1.4초로 나오는데, 캐치 기동은 0.5초라 필터를
+      통과한 속도로 pose를 적분하면 실제 이동량을 구조적으로 과소보고한다(0.5초 지점
+      기준 41cm 과소보고 — GEAR_RATIO 이중나눗셈 버그와 같은 계열의 오버슈트 원인).
+      MicroPython 벤치는 애초에 이 필터 없이 순수 오일러 적분으로 검증됐으므로, 검증된
+      동작으로 되돌리는 쪽을 택함. 칼만필터는 파이5로 보고하는 속도(텔레메트리) 스무딩
+      용도로만 남음. 스무딩을 pose에 다시 넣고 싶어지면 새 파라미터의 시정수가
+      0.1초 이하인지 먼저 확인할 것
+- [x] **모드 전환 시 `motor_control_reset()` 호출 누락** (2026-09-04, 다른 세션 발견·수정) —
+      PID 적분 상태가 모드(목표점/속도) 전환 시 안 지워지고 있었다. 정지해 있다 다음
+      명령 첫 틱에 쌓여있던 적분항 때문에 전력으로 튀어나갈 수 있는 버그. 벤치는
+      명령마다 `pid_reset()`을 불렀지만, 여기선 TargetCommand가 프레임마다(30~60Hz)
+      갱신되므로 "명령마다"가 아니라 **모드가 실제로 바뀔 때만**(+워치독 만료 시)
+      리셋하도록 대응시킴 — 매 프레임 리셋하면 Ki가 정지마찰 극복하려고 쌓이는 걸
+      계속 지워버려서 목표 근처에서 못 감
+- [x] **world→body 회전 누락** (2026-09-04, 다른 세션 발견·수정) — `main.c`가 목표
+      방향(`rx,ry`, world frame)을 회전 없이 그대로 `inverse_kinematics`(body frame
+      기대)에 넣고 있었다. theta≈0 가정으로 생략됐던 건데, theta는 리셋 수단이 없어
+      엔코더 노이즈만으로도 부팅 후 계속 드리프트한다. 벤치의 `drive_to()`에 있던
+      R(-theta) 회전을 추가. 방향별 바퀴 속도 상한(`max_body_speed`) 계산도 회전
+      **후** 값을 넣도록 같이 수정 — 바퀴 포화는 body 방향 기준이라 예전엔 theta≠0일 때
+      상한 자체가 틀렸음
 - [ ] 이 값들은 전부 MicroPython 50Hz 루프(DriveCommand/속도 경로)에서 검증된 것 —
-      **실기 C 빌드로 최종 확인 필요.** 1-2번 TargetCommand 경로가 완성되면 그쪽
-      기준으로도 재확인할 것
+      **실기 C 빌드로 최종 확인 필요.** 위 4건은 코드 리뷰로 잡은 것이지 실기로
+      확인된 게 아니다 — pi5-피코 실측 왕복 테스트가 우선순위 1번(architecture.md 5장)
 
 ## 4. 확인 필요 (하드웨어 스펙)
 
@@ -99,9 +120,9 @@ MicroPython 벤치 테스트(`pico_micropython/goto_xy_test.py`, 2026-09)로 아
 ## 5. 빌드 설정
 
 - [x] `CMakeLists.txt` / `pico_sdk_import.cmake` 작성 완료
-- [ ] 실제 Pico SDK 설치 + `PICO_SDK_PATH` 설정 후 빌드 검증
-      (`main.c`에 `sqrtf` 클램프가 추가됐다 — `config.h`가 `<math.h>`를 포함하므로
-      링크는 되어야 하지만 실기 빌드로 확인할 것)
+- [x] Pico SDK 설치 + 빌드 검증 (2026-09) — VS Code Pico 확장으로 SDK 2.3.0 설치,
+      `cmake -G Ninja` + `ninja`로 98/98 빌드 성공(에러 0), UF2 생성·플래싱 확인.
+      이후 위 3번 4건 수정도 재빌드 통과(경고 0). **아직 실물 로봇 구동 테스트는 안 함**
 
 ## 6. 구현 완료 항목
 

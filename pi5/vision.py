@@ -90,7 +90,8 @@ class _HailoYolo:
     def __init__(self, model_path: str) -> None:
         from hailo_platform import (HEF, VDevice, ConfigureParams,
                                      InputVStreamParams, OutputVStreamParams,
-                                     HailoStreamInterface, FormatType)
+                                     HailoStreamInterface, FormatType,
+                                     InferVStreams)
 
         self.model_path = model_path
         self._hef = HEF(model_path)
@@ -118,9 +119,37 @@ class _HailoYolo:
         self._output_params = OutputVStreamParams.make_from_network_group(
             self._network_group, quantized=False, format_type=FormatType.FLOAT32)
 
+        # ★ 네트워크 활성화와 vstream 생성은 **여기서 한 번만** 한다 (2026-09-04).
+        #   예전에는 `infer()` 안에서 프레임마다 `activate()` + `InferVStreams(...)` 를
+        #   새로 만들었다. 둘 다 수십 ms 드는 무거운 작업이라 프레임레이트를 그대로
+        #   깎아먹는다 — config 는 60fps 를 가정하는데 실기 로그는 32fps 였고
+        #   (ASSOC_STEP_PX 산정 근거), 원인이 여기일 가능성이 크다.
+        #
+        #   단순 성능 문제가 아니다: `config.DRIVE_TIMEOUT_S` 가 0.15s 라
+        #   **프레임 주기가 150ms 를 넘으면 매 프레임 피코 워치독이 만료돼** 로봇이
+        #   가다 서다를 반복한다.
+        #
+        #   컨텍스트 매니저를 `with` 없이 여는 형태라 `close()` 에서 반드시 되돌린다.
+        self._activation = self._network_group.activate(self._network_group_params)
+        self._activation.__enter__()
+        self._pipeline_ctx = InferVStreams(self._network_group, self._input_params,
+                                           self._output_params)
+        self._pipeline = self._pipeline_ctx.__enter__()
+
         self._first_call = True
         print(f"[_HailoYolo] 입력 {self._in_info.name} {self._in_info.shape} UINT8  "
-              f"출력 {self._out_name} (HAILO NMS BY CLASS)")
+              f"출력 {self._out_name} (HAILO NMS BY CLASS)  [활성화 1회, 재사용]")
+
+    def close(self) -> None:
+        """활성화/vstream 을 연 순서의 역순으로 닫는다. 두 번 불러도 안전하다."""
+        for attr in ("_pipeline_ctx", "_activation"):
+            ctx = getattr(self, attr, None)
+            if ctx is not None:
+                try:
+                    ctx.__exit__(None, None, None)
+                except Exception as exc:  # noqa: BLE001 - 정리 실패해도 계속 닫는다
+                    print(f"[_HailoYolo] {attr} 정리 실패: {exc}")
+                setattr(self, attr, None)
 
     def _letterbox(self, frame: np.ndarray) -> tuple[np.ndarray, float, int, int]:
         """YOLO 학습/추론과 같은 방식(비율 유지 축소 + 여백)으로 입력 크기에 맞춘다.
@@ -138,17 +167,12 @@ class _HailoYolo:
 
     def infer(self, frame: np.ndarray) -> list[tuple[tuple[float, float, float, float], float]]:
         """[(bbox(cx,cy,w,h), confidence), ...]. 클래스가 하나라 클래스명은 안 돌려준다."""
-        from hailo_platform import InferVStreams
-
         padded, scale, pad_x, pad_y = self._letterbox(frame)
         # UINT8 그대로 넣는다 — /255 정규화하면 안 된다(parse-hef가 UINT8 입력이라고
         # 확인해줬다. HEF 내부에서 양자화 스케일을 이미 알고 있다).
         input_data = {self._in_info.name: np.expand_dims(padded, axis=0)}
 
-        with self._network_group.activate(self._network_group_params):
-            with InferVStreams(self._network_group, self._input_params,
-                                self._output_params) as pipeline:
-                raw = pipeline.infer(input_data)
+        raw = self._pipeline.infer(input_data)
 
         return self._decode_output(raw, scale, pad_x, pad_y)
 
@@ -192,6 +216,18 @@ class _HailoYolo:
 _yolo: _HailoYolo | None = None
 
 
+def close_yolo() -> None:
+    """Hailo 활성화/vstream 을 닫는다. `main.py` 의 finally 에서 부른다.
+
+    `_HailoYolo.__init__` 이 활성화를 열어둔 채로 유지하므로(프레임마다 다시 열면
+    프레임레이트가 무너진다), 프로세스가 끝날 때 되돌려 줄 사람이 필요하다.
+    """
+    global _yolo
+    if _yolo is not None:
+        _yolo.close()
+        _yolo = None
+
+
 def _model_path() -> str:
     import os
 
@@ -218,30 +254,39 @@ def _get_yolo() -> _HailoYolo:
 def _undistort(u: float, v: float) -> tuple[float, float]:
     """렌즈 왜곡을 보정해 이상적인 핀홀 좌표로 옮긴다.
 
-    **이미지 전체를 펴지 않고 점 하나만 보정한다.** 40fps로 프레임을 통째로
-    undistort하는 건 파이 입장에서 낭비
+    **이미지 전체를 펴지 않고 점 하나만 보정한다.** 프레임을 통째로 undistort하는
+    건 파이 입장에서 낭비다.
 
-    LS40136은 M12 광각 렌즈다. 화각이 넓으면 왜곡이 가장자리에서 커지고, 궤적
-    피팅은 화면 전체를 가로지르는 궤적을 쓰므로 보정 없이는 잔차가 계통적으로
-    커진다. 캘리브레이션이 끝나기 전까지는 보정 없이 돌아가되(원본 좌표 그대로),
-    그 상태의 residual_px는 렌즈 왜곡을 포함한 값임을 기억할 것.
+    ★ 실제 변환은 `fisheye.to_pinhole_px()` 가 한다 (2026-09-04에 위임으로 바꿈).
+      예전에는 여기에 cv2 호출이 복제돼 있었고, 그래서 **`CAMERA_DISTORTION`이
+      None일 때 원본 좌표를 그대로 돌려줬다** — config.py 주석은 "None이면
+      fisheye.py의 해석적 등거리 근사로 대신 편다"고 약속하는데 실제로는 아무것도
+      안 하고 있었다. 이 렌즈(실측 대각 133.5°)에서 보정을 건너뛰면 입사각 42°에서
+      깊이가 79% 틀어지므로, 조용히 넘어가면 안 되는 차이다.
+
+      `to_pinhole_px()` 는 계수가 있으면 실측 K/D(cv2.fisheye)를, 없으면 해석적
+      등거리 근사를 쓰고, 프레임 밖 좌표에는 경고도 띄운다.
     """
-    if config.CAMERA_DISTORTION is None:
-        return u, v
+    if config.CAMERA_MODEL != "fisheye":
+        # 핀홀 경로. `fisheye.to_pinhole_px()` 는 CAMERA_MODEL=="pinhole" 이면
+        # "할 일 없다"며 입력을 그대로 돌려주는데, 그건 **왜곡계수(k1,k2,p1,p2,k3)를
+        # 무시한다는 뜻**이라 여기로 보내면 안 된다. 이쪽은 직접 편다.
+        if config.CAMERA_DISTORTION is None:
+            return u, v
+        import cv2
 
-    import cv2
-
-    K = np.array([[config.CAMERA_FX, 0.0, config.CAMERA_CX],
-                  [0.0, config.CAMERA_FY, config.CAMERA_CY],
-                  [0.0, 0.0, 1.0]])
-    d = np.asarray(config.CAMERA_DISTORTION, dtype=float)
-    pts = np.array([[[float(u), float(v)]]], dtype=np.float64)
-
-    if config.CAMERA_MODEL == "fisheye":
-        out = cv2.fisheye.undistortPoints(pts, K, d.reshape(4, 1), P=K)
-    else:
+        K = np.array([[config.CAMERA_FX, 0.0, config.CAMERA_CX],
+                      [0.0, config.CAMERA_FY, config.CAMERA_CY],
+                      [0.0, 0.0, 1.0]])
+        d = np.asarray(config.CAMERA_DISTORTION, dtype=float)
+        pts = np.array([[[float(u), float(v)]]], dtype=np.float64)
         out = cv2.undistortPoints(pts, K, d, P=K)
-    return float(out[0, 0, 0]), float(out[0, 0, 1])
+        return float(out[0, 0, 0]), float(out[0, 0, 1])
+
+    import fisheye
+
+    out = fisheye.to_pinhole_px([(float(u), float(v))])
+    return float(out[0, 0]), float(out[0, 1])
 
 
 def detect_all(frame: object, t: float) -> list[Detection]:
