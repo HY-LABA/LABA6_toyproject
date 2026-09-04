@@ -75,6 +75,8 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
 
     `hold_s` 가 있으면 그 한 프레임만 전송하고 워치독을 `hold_s` 로 늘린다.
     """
+    _preflight()
+
     cam = vision_open()
     link = communication.SerialLink()
     pool = tracker_mod.TrackerPool()
@@ -183,7 +185,38 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
             utils.log(f"stop command failed: {exc}")
         link.close()
         cam.close()
+        # Hailo 활성화는 __init__ 에서 한 번 열고 계속 유지하므로 여기서 닫는다.
+        try:
+            vision.close_yolo()
+        except Exception as exc:  # noqa: BLE001 - 정리 실패해도 계속 정리한다
+            utils.log(f"hailo cleanup failed: {exc}")
         utils.log("catch loop end")
+
+
+def _preflight() -> None:
+    """돌리기 전에 **조용히 틀릴 수 있는 것들**만 확인하고 로그에 남긴다.
+
+    여기서 죽이지는 않는다 — 실기에서는 값이 덜 채워진 채로도 일단 돌려보고 싶은
+    상황이 많다. 대신 나중에 로그만 보고 "그때 설정이 어긋나 있었네"를 알 수 있게 한다.
+    """
+    problems = control.verify_wheel_config()
+    if problems:
+        utils.log(f"⚠ pi5/config.py 와 pico/config.h 가 어긋난다 ({len(problems)}건) — "
+                  f"파이의 도달 판정(tracker._reach)과 피코의 실제 속도가 갈린다")
+        for p in problems:
+            utils.log(f"    - {p}")
+    else:
+        utils.log("바퀴 설정 대조: pi5 == pico 일치")
+
+    # 카메라 축 -> 로봇 축 회전이 미실측이면 **거리는 맞는데 방향이 틀린 곳으로 간다.**
+    # 0.0 이 진짜 측정 결과일 수도 있으므로 막지는 않고 경고만 한다.
+    if config.CAMERA_YAW_RAD == 0.0:
+        utils.log("⚠ config.CAMERA_YAW_RAD = 0.0 (미실측 기본값). 카메라를 로봇에 "
+                  "돌려 붙였다면 착지점이 그만큼 회전된 방향으로 나간다 — "
+                  "config.py 의 측정 절차 참고. 실측해서 0.0 이 맞다면 무시할 것.")
+    if config.CAMERA_OFFSET_M == (0.0, 0.0):
+        utils.log("⚠ config.CAMERA_OFFSET_M = (0,0) (미실측 기본값). 카메라가 로봇 "
+                  "회전중심에서 떨어져 있으면 매번 같은 방향으로 그만큼 어긋난다.")
 
 
 def vision_open():

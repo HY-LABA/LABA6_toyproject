@@ -56,8 +56,18 @@ int main(void) {
         RobotVelocity raw_velocity = {vx, vy, omega};
         RobotVelocity smooth_velocity = odometry_kalman_update(raw_velocity, dt);
 
+        // ★ 모드가 바뀔 때만 PID 상태를 지운다 (motor_control_reset).
+        //   **매 명령마다** 지우면 안 된다 — 파이는 TargetCommand 를 프레임마다
+        //   (30~60 Hz) 갱신해 보내므로, 명령마다 리셋하면 Ki 가 정지마찰을 이기려고
+        //   쌓이는 걸 매번 지워버려 목표 근처에서 영원히 못 간다. 벤치
+        //   (goto_xy_test.py)가 "명령마다 pid_reset" 이었던 건 거기선 사용자가 좌표를
+        //   하나 타이핑할 때마다 한 사이클이 통째로 끝나고 새로 시작했기 때문이다 —
+        //   여기서 그에 대응하는 경계는 **모드 전환**이다.
         RxCommand new_cmd = communication_try_receive();
         if (new_cmd.kind == RX_CMD_TARGET) {
+            if (mode != DRIVE_TARGET) {
+                motor_control_reset();
+            }
             mode = DRIVE_TARGET;
             target_x = new_cmd.target_x;
             target_y = new_cmd.target_y;
@@ -65,6 +75,9 @@ int main(void) {
             cmd_timeout_s = new_cmd.timeout_s;
             cmd_elapsed_s = 0.0f;
         } else if (new_cmd.kind == RX_CMD_VELOCITY) {
+            if (mode != DRIVE_VELOCITY) {
+                motor_control_reset();
+            }
             mode = DRIVE_VELOCITY;
             vel_vx = new_cmd.target_vx;
             vel_vy = new_cmd.target_vy;
@@ -77,6 +90,7 @@ int main(void) {
             cmd_elapsed_s += dt;
             if (cmd_elapsed_s >= cmd_timeout_s) {
                 mode = DRIVE_NONE;
+                motor_control_reset();
             }
         }
 
@@ -88,26 +102,41 @@ int main(void) {
             // docs/protocol.md 2장: 파이는 절대좌표만 보내고, "이미 간 만큼"을
             // 빼는 건 피코가 자기 오도메트리로 한다 — 그래야 이중으로 안 빠진다.
             RobotPose pose = odometry_get_pose();
-            float rx = target_x - pose.x;
+            float rx = target_x - pose.x;   // world frame (오도메트리 원점 기준)
             float ry = target_y - pose.y;
             float dist = sqrtf(rx * rx + ry * ry);
 
             if (dist > POSITION_TOLERANCE_M) {
+                // ★ world frame -> body frame 회전 R(-theta) (2026-09-04 추가).
+                //   pose 는 world 축인데 inverse_kinematics 는 **body 축**을 받는다.
+                //   theta≈0 이라는 가정으로 이 회전이 빠져 있었는데, theta 는 어디서도
+                //   리셋되지 않고 엔코더 노이즈만으로도 부팅 이후 계속 누적된다.
+                //   벤치(goto_xy_test.py `drive_to()`)는 정확히 이 회전을 하고 있었다.
+                //   회전은 노름을 보존하므로 dist 는 그대로 쓴다.
+                float c = cosf(pose.theta);
+                float s = sinf(pose.theta);
+                float bx =  c * rx + s * ry;
+                float by = -s * rx + c * ry;
+
                 // 상한은 **이 방향에서** 바퀴가 포화되지 않는 값이다. 방향에 따라
                 // 1.22~1.41 m/s 로 다르고, 파이의 tracker._reach() 가 믿는 값도
                 // 이것이다 (docs/protocol.md 2장의 ⚠ 상자).
-                float limit = max_body_speed(rx, ry, 0.0f);
+                // ⚠ 바퀴 포화는 **body 방향**으로 결정되므로 회전 후 값을 넣어야 한다.
+                float limit = max_body_speed(bx, by, 0.0f);
                 // 남은거리 ÷ 남은시간 — 목표에 가까워질수록 속도가 저절로 줄어서
                 // 별도 감속 프로파일 없이 P 제어가 감속기 역할을 한다.
                 // 남은시간이 0 이하면 이미 착지 시각을 지난 것이라 최대로 붙는다.
                 // (0 이 아니라 1e-3 으로 거르는 건 아주 작은 양수로 나눠 v 가
                 //  발산하는 걸 막기 위해서다 — 어차피 아래에서 잘리지만.)
+                // ⚠ 이 분기는 pi5 control.to_drive_command() 의 `speed=math.inf`
+                //   분기와 **같은 식이어야 한다.** 한쪽만 바꾸면 파이의 로그와
+                //   tracker._reach() 도달판정이 피코 실제 동작과 조용히 갈린다.
                 float v = (time_remaining_s > 1e-3f) ? (dist / time_remaining_s) : limit;
                 if (v > limit) {
                     v = limit;
                 }
-                target_vx = (rx / dist) * v;
-                target_vy = (ry / dist) * v;
+                target_vx = (bx / dist) * v;
+                target_vy = (by / dist) * v;
             }
             // 다음 명령이 오면 덮어쓴다 — 새 명령이 안 오는 동안만 스스로 깎는다.
             time_remaining_s -= dt;

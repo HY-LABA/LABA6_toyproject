@@ -59,6 +59,34 @@ import trajectory as traj
 IDLE, TRACKING, COOLDOWN = "IDLE", "TRACKING", "COOLDOWN"
 
 
+# ── 좌표계 경계 ────────────────────────────────────────────────────────────
+# `trajectory.py` 는 **카메라 이미지 축**(X=화면 우, Y=화면 아래)으로 푼다.
+# 오도메트리·역기구학·`control` 은 **로봇 body 축**(+X=우측, +Y=전방)을 쓴다.
+# 그 사이의 회전이 `config.CAMERA_YAW_RAD` 이고, 두 축이 만나는 지점은
+# 이 파일의 딱 두 곳뿐이다:
+#
+#   robot -> cam :  Tracker._cam_xy()   피팅 입력(`cams`)을 만들 때
+#   cam -> robot :  Tracker.landing()   착지 예측을 내보낼 때
+#
+# 이 두 곳만 지키면 `tracker` 바깥(`control`, `main`)은 전부 로봇 축이고,
+# `trajectory` 안은 전부 카메라 축이라 섞일 수가 없다.
+
+
+def _rot(x: float, y: float, ang: float) -> tuple[float, float]:
+    c, s = math.cos(ang), math.sin(ang)
+    return (c * x - s * y, s * x + c * y)
+
+
+def cam_to_robot(x: float, y: float) -> tuple[float, float]:
+    """카메라 이미지 축 -> 로봇 body 축."""
+    return _rot(x, y, config.CAMERA_YAW_RAD)
+
+
+def robot_to_cam(x: float, y: float) -> tuple[float, float]:
+    """로봇 body 축 -> 카메라 이미지 축."""
+    return _rot(x, y, -config.CAMERA_YAW_RAD)
+
+
 # ── 가설 하나 ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -89,14 +117,20 @@ class Tracker:
 
     # ── 좌표 ──────────────────────────────────────────────────────────────
     def _cam_xy(self, odom_xy) -> tuple[float, float]:
-        """이 가설의 원점 기준 **카메라 광학중심** 위치.
+        """이 가설의 원점 기준 **카메라 광학중심** 위치 — **카메라 축**으로 돌려서.
 
         로봇 회전중심이 아니라 카메라 위치여야 한다 — 관측 (u,v)를 만든 게 카메라이기
         때문이다. `CAMERA_OFFSET_M`은 통 입구 림에 단 카메라가 회전중심에서 떨어진 양.
+
+        ★ 오도메트리도 CAMERA_OFFSET_M 도 **로봇 body 축**이다. 그런데 이 값이
+          들어가는 `trajectory.fit_trajectory(cams=...)` 는 **카메라 축**으로 푼다.
+          그래서 로봇 축에서 더한 뒤 마지막에 한 번 회전시킨다 (`robot_to_cam`).
+          예전에는 이 회전이 없어서 두 축을 그냥 섞고 있었다.
         """
         ox, oy = config.CAMERA_OFFSET_M
-        return (odom_xy[0] - self.origin_odom[0] + ox,
-                odom_xy[1] - self.origin_odom[1] + oy)
+        rx = odom_xy[0] - self.origin_odom[0] + ox      # 로봇 body 축
+        ry = odom_xy[1] - self.origin_odom[1] + oy
+        return robot_to_cam(rx, ry)                     # -> 카메라 축
 
     def moved_since_start(self, odom_xy) -> tuple[float, float]:
         """이 가설이 시작된 뒤 **로봇 중심**이 이동한 양.
@@ -196,8 +230,13 @@ class Tracker:
     def landing(self):
         """(x, y, 남은시간) 또는 None.
 
-        x, y는 **이 가설이 시작된 시점의 로봇 중심**을 원점으로 한 월드 좌표다.
-        카메라 오프셋은 `_cam_xy`에서 이미 반영됐으므로 여기서 또 빼면 안 된다.
+        x, y는 **이 가설이 시작된 시점의 로봇 중심**을 원점으로 한, **로봇 body 축**
+        좌표다. 카메라 오프셋은 `_cam_xy`에서 이미 반영됐으므로 여기서 또 빼면 안 된다.
+
+        ★ `trajectory` 가 돌려주는 건 **카메라 축**이므로 여기서 로봇 축으로 돌린다
+          (`cam_to_robot`). 이 함수 바깥(`_reach`, `control.to_target_command`,
+          `control.to_drive_command`)은 전부 로봇 축 세계다 — 거기서 오도메트리와
+          더하고 빼는 게 그래서 성립한다.
         """
         if self.fit is None:
             return None
@@ -205,6 +244,7 @@ class Tracker:
         if out is None:
             return None
         x, y, dt_from_t0 = out
+        x, y = cam_to_robot(x, y)           # 카메라 축 -> 로봇 body 축
         # 남은 시간은 마지막 관측 시각 기준으로 환산해 준다 —
         # 호출부는 "지금부터 몇 초 남았나"로 판단해야 하기 때문.
         return x, y, self.fit.t0 + dt_from_t0 - self.times[-1]

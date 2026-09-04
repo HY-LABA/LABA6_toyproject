@@ -154,6 +154,11 @@ def to_target_command(landing_xy: tuple[float, float], origin_odom: tuple[float,
     (`tracker.Tracker.landing()`), `origin_odom` 은 바로 그 시점에 피코가 보고한
     pose 다. 둘을 더하면 피코 오도메트리 원점 기준 절대 좌표가 된다.
 
+    ⚠ 이 덧셈은 **둘이 같은 축일 때만** 성립한다. `landing_xy` 는 `tracker.landing()`
+      이 이미 `cam_to_robot()` 으로 로봇 body 축까지 돌려서 준 값이다 —
+      `trajectory` 가 내놓는 카메라 이미지 축 원값을 여기로 바로 넘기면 안 된다
+      (거리는 맞고 방향만 `config.CAMERA_YAW_RAD` 만큼 틀어진다).
+
     ⚠ 이 덧셈은 **θ≈0** 일 때만 성립한다. 트랙 좌표는 body 축이고 오도메트리는
       world 축이라, 로봇이 돌면 더하기 전에 회전시켜야 한다. 지금은 ω=0 이다.
 

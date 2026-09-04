@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "pico/stdlib.h"
+#include "tusb.h"   // tud_cdc_* — 송신 여유 확인용(논블로킹)
 
 #define FRAME_START 0xAA
 #define TARGET_PAYLOAD_LEN 16
@@ -88,8 +89,19 @@ RxCommand communication_try_receive(void) {
                         result.kind = RX_CMD_VELOCITY;
                     }
                 }
+                // ★ 여기서 return 하지 않는다 (2026-09-04 수정).
+                //   예전에는 프레임 하나를 완성하면 즉시 돌아갔다. 그러면 이 함수는
+                //   **제어 틱당 최대 1프레임**만 소비한다 — 제어 주기가 20ms(50Hz)인데
+                //   파이는 카메라 프레임마다(30~60Hz) 보내므로, 파이가 50Hz를 넘는
+                //   순간 USB CDC 버퍼에 밀리기 시작하고 **지연이 무한히 누적된다.**
+                //   낡은 목표점으로 달리는 건 오도메트리가 낡은 것과 똑같이 위험하다.
+                //
+                //   그래서 버퍼를 끝까지 비우고 **마지막 완전 프레임만** 채택한다.
+                //   중간 프레임들은 어차피 낡은 정보다. 파이 쪽
+                //   `try_receive_odometry()` 가 반대 방향에서 쓰는 방침과 같다
+                //   (docs/protocol.md 4장).
                 rx_state = RX_WAIT_START;
-                return result;
+                break;
         }
     }
 
@@ -97,6 +109,15 @@ RxCommand communication_try_receive(void) {
 }
 
 void communication_send_odometry(RobotPose pose, RobotVelocity velocity) {
+    // ★ 논블로킹 (2026-09-04 추가). `putchar_raw` 는 호스트가 안 읽으면 **블로킹한다**
+    //   — 제어 루프 안에서 걸리면 모터가 마지막 듀티로 계속 돈다. 오도메트리는 한
+    //   프레임 빠져도 되지만 제어 루프는 멈추면 안 된다 (docs/protocol.md 4장,
+    //   pico/TODO.md 3장). 보낼 자리가 없으면 이번 주기는 그냥 건너뛴다.
+    if (!tud_cdc_connected() ||
+        tud_cdc_write_available() < (uint32_t)(RECV_PAYLOAD_LEN + 3)) {
+        return;
+    }
+
     uint8_t payload[RECV_PAYLOAD_LEN];
     memcpy(&payload[0], &pose.x, 4);
     memcpy(&payload[4], &pose.y, 4);
