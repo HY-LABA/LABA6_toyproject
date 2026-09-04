@@ -112,6 +112,7 @@ class Tracker:
 
     started_at: float | None = None       # 이 가설의 첫 관측 시각
     last_seen: float | None = None        # 마지막으로 관측이 붙은 시각
+    fit_at: float | None = None           # self.fit 을 마지막으로 **갱신**한 관측 시각
     origin_odom: tuple[float, float] = (0.0, 0.0)   # ★ 첫 관측 시점의 오도메트리
     _first_shown: bool = field(default=False, repr=False)
 
@@ -143,7 +144,14 @@ class Tracker:
 
     # ── 누적 ──────────────────────────────────────────────────────────────
     def add(self, det, odom_xy, now: float) -> traj.Fit | None:
-        """관측 하나를 누적하고 갱신된 fit을 돌려준다. 아직 못 믿으면 None."""
+        """관측 하나를 누적하고 **새로 푼** fit을 돌려준다. 못 믿으면 None.
+
+        ★ 반환이 None이어도 `self.fit`은 남아 있을 수 있다 (`config.FIT_HOLD_S`).
+          예전에는 맨 앞에서 `self.fit = None`을 해서, 게이트를 한 프레임만 못 넘겨도
+          그 가설이 통째로 `viable`이 아니게 되고 그 프레임엔 피코로 명령이 아예
+          안 나갔다. 워치독이 0.15s라 몇 번 겹치면 로봇이 가다 선다.
+          그래서 직전 해를 짧게 들고 간다 — 자세한 근거는 config.FIT_HOLD_S 주석.
+        """
         if self.started_at is None:
             self.started_at = det.t
             self.origin_odom = tuple(odom_xy)      # ★ 이 가설의 좌표 원점
@@ -155,7 +163,26 @@ class Tracker:
         if len(self.times) > config.TRACK_WINDOW:
             del self.times[0], self.uvs[0], self.cams[0]
 
-        self.fit = None
+        fit = self._solve()
+        if fit is not None:
+            self.fit = fit
+            self.fit_at = det.t
+            return fit
+
+        # 이번 프레임은 못 풀었다. 직전 해를 FIT_HOLD_S 까지만 들고 가고,
+        # 그걸 넘겼으면 버린다 — 노이즈 한 번이 아니라 뭔가 진짜 잘못된 것이다.
+        if (self.fit is not None and self.fit_at is not None
+                and det.t - self.fit_at > config.FIT_HOLD_S):
+            self.fit = None
+            self.fit_at = None
+        return None
+
+    def _solve(self) -> traj.Fit | None:
+        """지금 쌓인 관측으로 푼다. 게이트를 하나라도 못 넘기면 None.
+
+        `add()`에서 갈라낸 이유는 "푸는 것"과 "직전 해를 얼마나 들고 갈 것인가"가
+        서로 다른 결정이기 때문이다.
+        """
         if self.n < config.MIN_OBSERVATIONS:
             return None
         if self.time_span < config.MIN_TIME_SPAN_S:
@@ -183,12 +210,10 @@ class Tracker:
         # 프레임들이 이어서 보정한다.
         if not self._first_shown:
             self._first_shown = True
-            self.fit = fit
             return fit
 
         if not self._depth_converged(fit):
             return None
-        self.fit = fit
         return fit
 
     def _depth_converged(self, fit: traj.Fit) -> bool:
