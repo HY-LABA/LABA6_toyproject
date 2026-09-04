@@ -40,13 +40,30 @@
        달려 중심에서 비켜 있으면, 카메라를 지나는 M1 방향 선 위에 서야 한다.
   ③ 화면에서 그 물체를 **마우스로 클릭**한다. 방위각이 바로 표시된다.
   ④ `f` 를 눌러 "이건 전방" 이라고 기록한다.
-  ⑤ **같은 물체(사람)를 로봇 우측으로 옮겨서 한 번 더 잰다** — 우측에 가서 서고,
-     화면에 찍힌 그 자리를 다시 클릭하고 `r`. (f 와 r 은 서로 다른 두 번의 측정이다)
-     ⚠ **최소 두 방향은 재야 한다.** 하나만으로는 카메라가 돌아간 건지 기울어진
-       건지 구분이 안 된다. 90° 떨어진 두 방향(전방+우측)이 제일 잘 잡아낸다.
-       우측이 곤란하면 후방(`b`)이나 좌측(`l`)도 된다. 셋 넷 다 재도 좋다.
+  ⑤ **같은 물체(사람)를 옮겨서 나머지 방향도 잰다** — 우측 가서 클릭하고 `r`,
+     후방 `b`, 좌측 `l`. (f/r/b/l 은 서로 다른 네 번의 측정이다)
+
+     ★★ **네 방향을 다 재는 게 제일 좋다.** 카메라가 살짝 기울어 있어도 yaw 가
+        정확해지기 때문이다. 기울기 τ 는 방위각을 `−τ·tan(ε)·cos(φ−α)` 만큼
+        밀어내는데, 이 항이 `cos` 이라 **90°씩 네 방향이면 합이 정확히 0** 이다.
+        합성 검증(참 yaw 90°, 고도각 50°):
+
+            참 tilt   2방향 yaw오차   3방향    4방향
+              0°         0.00°       0.00°   0.00°
+              4°           —         0.28°   0.00°
+              6°         1.28°       0.42°   0.01°
+             10°           —           —     0.05°
+
+        즉 4방향이면 카메라가 10° 기울어 있어도 yaw 는 0.05° 안에 들어온다.
+     ⚠ 최소 두 방향. 하나만으로는 돌아간 건지 기울어진 건지 구분이 안 된다.
   ⑥ `s` 를 누르면 CAMERA_YAW_RAD 를 풀어서 터미널에 출력한다.
+     관측이 3개 이상이면 **기울기 τ 와 그 방향까지 같이** 풀어서 보여준다
+     (지금 코드가 보정하지는 못한다 — 나중에 카메라 고정할 때 쓰라고 남기는 값).
   ⑦ 출력된 줄을 `config.py` 에 붙여넣는다.
+
+  ★ 설 위치: 화면에서 **중심에서 확실히 벗어나되 프레임 안**에 들어오게. 대충
+    중심과 가장자리의 중간쯤이 좋다. 너무 가운데면 방위각이 노이즈에 흔들리고
+    (도구가 경고한다), 너무 멀면 화면 밖으로 나간다.
 
   키: f=전방(M1)  r=우측  b=후방  l=좌측  s=풀기  c=지우기  q/ESC=종료
 
@@ -107,6 +124,64 @@ def _wrap180(deg: float) -> float:
     return (deg + 180.0) % 360.0 - 180.0
 
 
+def elevation_deg(u: float, v: float) -> float:
+    """관측 픽셀 -> 물체의 **고도각**(도). 90° 가 바로 머리 위(광축), 0° 가 수평.
+
+    왜곡을 편 뒤 주점에서의 반경 r 이 곧 입사각을 준다 (tan θ = r/f).
+    고도각은 그 여각이다. tilt 보정에서 tan(고도각)의 역수 가중치로 쓴다.
+    """
+    import fisheye
+
+    uv = fisheye.to_pinhole_px([(float(u), float(v))])
+    x = (uv[0, 0] - config.CAMERA_CX) / config.CAMERA_FX
+    y = (uv[0, 1] - config.CAMERA_CY) / config.CAMERA_FY
+    return 90.0 - math.degrees(math.atan(math.hypot(x, y)))
+
+
+def fit_yaw_and_tilt(obs: list[tuple[float, float, float]]):
+    """관측 3개 이상 -> (yaw, 기울기 τ, 기울어진 방향 α, 잔차들, 조건수). 전부 도 단위.
+
+    obs: [(로봇축 방위각, 카메라축 방위각, 고도각), ...]
+
+    ★ 모델. 카메라가 방위 α 쪽으로 τ 만큼 기울면, 관측 방위각이 이만큼 밀린다:
+
+        yaw_i = yaw + τ · tan(ε_i) · cos(φ_i − α)
+
+      (작은 각 근사. 유도: 축 n=(cos α, sin α, 0) 둘레로 τ 회전시킬 때 방향벡터
+       d 의 XY 투영 방위각 변화가 −τ·tan(ε)·cos(φ−α) 다.)
+
+      `τcos(φ−α) = A cos φ + B sin φ` 로 풀면 미지수 (yaw, A, B) 에 대해 **선형**이라
+      최소제곱 한 번이면 끝난다. τ = hypot(A,B), α = atan2(B,A).
+
+    ★ 왜 4방향이 좋은가: 보정항이 cos(φ−α) 라 **90°씩 네 방향이면 합이 0** 이다.
+      즉 4방향을 고르게 재면 단순 평균만으로도 tilt 편향이 1차까지 상쇄된다.
+      그 위에 이 피팅을 얹으면 남은 사인파에서 τ 와 α 까지 같이 읽어낼 수 있다.
+
+    ⚠ 관측이 한쪽에 몰려 있으면 A,B 를 못 가른다 — 조건수로 같이 보고한다.
+    """
+    n = len(obs)
+    if n < 3:
+        return None
+
+    robot = np.array([math.radians(o[0]) for o in obs])
+    phi = np.array([math.radians(o[1]) for o in obs])
+    tan_e = np.array([math.tan(math.radians(o[2])) for o in obs])
+
+    # yaw_i 를 서로 이어붙인다(언랩) — 안 하면 ±180° 경계에서 최소제곱이 깨진다.
+    raw = robot - phi
+    ref = math.atan2(float(np.sin(raw).sum()), float(np.cos(raw).sum()))
+    y = ref + np.angle(np.exp(1j * (raw - ref)))
+
+    A = np.column_stack([np.ones(n), tan_e * np.cos(phi), tan_e * np.sin(phi)])
+    sol, _res, _rank, sv = np.linalg.lstsq(A, y, rcond=None)
+    cond = float(sv[0] / sv[-1]) if sv.size and sv[-1] > 0 else math.inf
+
+    yaw, a, b = float(sol[0]), float(sol[1]), float(sol[2])
+    resid = np.degrees(y - A @ sol)
+    return (math.degrees(yaw), math.degrees(math.hypot(a, b)),
+            math.degrees(math.atan2(b, a)), resid.tolist(), cond)
+
+
 def _circular_mean_deg(vals: list[float]) -> float:
     s = sum(math.sin(math.radians(a)) for a in vals)
     c = sum(math.cos(math.radians(a)) for a in vals)
@@ -121,10 +196,11 @@ def solve(observations: list[tuple[str, float, float]]) -> int:
     print(f"주점 (cx, cy) = ({config.CAMERA_CX}, {config.CAMERA_CY})   "
           f"해상도 {config.CAMERA_RESOLUTION[0]}x{config.CAMERA_RESOLUTION[1]}")
     print()
-    print(f"{'방향':>8}{'로봇축':>10}{'픽셀':>18}{'카메라축':>11}{'yaw 후보':>12}")
-    print("  " + "-" * 56)
+    print(f"{'방향':>8}{'로봇축':>10}{'픽셀':>18}{'카메라축':>11}{'고도각':>9}{'yaw 후보':>12}")
+    print("  " + "-" * 65)
 
     cands: list[float] = []
+    triples: list[tuple[float, float, float]] = []
     w, h = config.CAMERA_RESOLUTION
     for name, u, v in observations:
         if name in DIRECTIONS:
@@ -142,9 +218,12 @@ def solve(observations: list[tuple[str, float, float]]) -> int:
             print(f"  ⚠ ({u:.0f},{v:.0f}) 는 주점에서 {r:.0f}px 밖에 안 떨어졌다. "
                   f"방위각이 노이즈에 크게 흔들린다 — 물체를 더 옆으로 옮겨 다시 잴 것")
         cam_deg = cam_azimuth_deg(u, v)
+        elev = elevation_deg(u, v)
         yaw = yaw_from_observation(u, v, robot_deg)
         cands.append(yaw)
-        print(f"{name:>8}{robot_deg:>9.1f}°  ({u:>7.1f},{v:>7.1f}){cam_deg:>10.1f}°{yaw:>11.1f}°")
+        triples.append((robot_deg, cam_deg, elev))
+        print(f"{name:>8}{robot_deg:>9.1f}°  ({u:>7.1f},{v:>7.1f})"
+              f"{cam_deg:>10.1f}°{elev:>8.1f}°{yaw:>11.1f}°")
 
     mean = _circular_mean_deg(cands)
     print()
@@ -163,23 +242,86 @@ def solve(observations: list[tuple[str, float, float]]) -> int:
         print("⚠ 관측이 하나뿐이다. **최소 두 방향으로 재서 서로 맞는지 확인할 것** —")
         print("  하나만으로는 카메라가 기울어진 건지 돌아간 건지 구분이 안 된다.")
 
+    # ── 기울기(tilt)까지 같이 푼다 (관측 3개 이상) ────────────────────────
+    fit = fit_yaw_and_tilt(triples)
+    if fit is not None:
+        yaw_f, tilt, tilt_dir, resid, cond = fit
+        print()
+        print("── 기울기까지 같이 푼 결과 ─────────────────────────────────")
+        if cond > 50.0:
+            print(f"  ⚠ 조건수 {cond:.0f} — 관측이 한쪽에 몰려 있어 기울기를 못 가른다.")
+            print("    서로 90° 떨어진 방향들로 재야 한다 (전방+우측+후방+좌측이 이상적).")
+            print("    아래 값은 믿지 말 것. 위의 단순 평균을 쓸 것.")
+        else:
+            print(f"  yaw       = {yaw_f:+.1f}°   (단순 평균 {mean:+.1f}° 에서 "
+                  f"{abs(_wrap180(yaw_f - mean)):.1f}° 보정)")
+            print(f"  기울기 τ  = {tilt:.1f}°  (로봇축 {tilt_dir:+.1f}° 방향으로 기울어짐)")
+            print(f"  잔차      = " + " ".join(f"{r:+.2f}°" for r in resid))
+            print()
+
+        # ★ 잔차가 크면 **모델 자체가 안 맞는 것**이다. 기울기 모델은 "카메라가
+        #   조금 기울었다" 까지만 설명한다 — 잔차가 남는다는 건 그걸로 설명이 안
+        #   되는 다른 원인이 있다는 뜻이고, 그러면 yaw 값도 같이 못 믿는다.
+        worst = max(abs(r) for r in resid) if resid else 0.0
+        if cond <= 50.0 and worst > 3.0:
+            print(f"  ⚠⚠ 잔차가 최대 {worst:.1f}° 다 — **기울기 모델로 설명이 안 된다.**")
+            print("     기울어짐만으로는 이만큼 안 어긋나므로 다른 원인이다:")
+            print("       - 클릭한 방향 이름이 실제와 다르다 (f/r/b/l 을 잘못 눌렀다)")
+            print("       - 물체를 로봇 축이 아닌 자리에 뒀다 (카메라를 지나는 선 위여야 한다)")
+            print("       - 물체를 옮기다 카메라를 건드려 돌아갔다")
+            print("       - 주점(CAMERA_CX/CY)이 실제와 많이 다르다")
+            print("     아래 yaw 값을 쓰지 말고 **다시 재는 게 맞다.**")
+            print()
+
+        if cond <= 50.0 and worst <= 3.0:
+            if tilt < 2.0:
+                print(f"  기울기 {tilt:.1f}° 는 착지 오차 약 {tilt:.1f}cm 수준이다 "
+                      f"(1도당 약 1cm) — 지금은 신경 안 써도 된다.")
+            else:
+                print(f"  기울기 {tilt:.1f}° 는 착지 오차 약 {tilt:.1f}cm 수준이다 "
+                      f"(1도당 약 1cm).")
+                print("  본체 완성하고 카메라를 고정할 때 이 방향으로 그만큼 낮춰 달면 된다.")
+            print("  ※ 이 τ 는 지금 코드가 보정하지 못한다 (GRAVITY_CAM 이 수직 가정).")
+            print("    나중에 손볼 때 쓰라고 남기는 값이다 — 어딘가 적어둘 것.")
+            if len(triples) >= 4:
+                print("  ※ 4방향을 고르게 쟀으므로 위의 **단순 평균만으로도 기울기 편향이")
+                print("    1차까지 상쇄**된다. 두 yaw 값이 비슷하면 그게 정상이다.")
+
+    # 기울기 피팅이 잘 풀렸으면 그쪽 yaw 를 쓴다 — tilt 편향을 빼고 푼 값이다.
+    best = mean
+    source = "단순 평균"
+    suspect = False
+    if fit is not None:
+        _yaw_f, _t, _td, _resid, _cond = fit
+        worst = max(abs(r) for r in _resid) if _resid else 0.0
+        if _cond <= 50.0:
+            best = _yaw_f
+            source = "기울기 보정"
+            suspect = worst > 3.0
+    if len(cands) == 1:
+        suspect = True
+
     print()
-    print("config.py 에 붙여넣을 줄:")
+    if suspect:
+        print("⚠⚠ 아래 값은 **믿을 수 없다** (위 경고 참고). 다시 재는 게 맞다.")
+        print("   그래도 참고용으로 적어둔다:")
+        print()
+    print(f"config.py 에 붙여넣을 줄  ({source} 기준):")
     print()
     nice = {0.0: "0.0", 90.0: "math.pi / 2", 180.0: "math.pi", -90.0: "-math.pi / 2"}
-    snapped = min(nice, key=lambda a: abs(_wrap180(mean - a)))
-    off = abs(_wrap180(mean - snapped))
+    snapped = min(nice, key=lambda a: abs(_wrap180(best - a)))
+    off = abs(_wrap180(best - snapped))
     if off <= 5.0:
-        print(f"    CAMERA_YAW_RAD = {nice[snapped]}   # 실측 {mean:+.1f}° "
+        print(f"    CAMERA_YAW_RAD = {nice[snapped]}   # 실측 {best:+.1f}° "
               f"(-> {snapped:+.0f}° 로 반올림)")
         print()
         print(f"  실측값이 {snapped:+.0f}° 에서 {off:.1f}° 안에 들어온다. 카메라를 직각으로")
         print("  달았다는 뜻이므로 딱 떨어지는 값을 쓰는 게 낫다 — 조립 오차와 클릭 오차까지")
         print("  각도에 굳혀 넣을 이유가 없다.")
     else:
-        print(f"    CAMERA_YAW_RAD = math.radians({mean:.1f})   # 실측")
+        print(f"    CAMERA_YAW_RAD = math.radians({best:.1f})   # 실측")
         print()
-        print(f"  {mean:+.1f}° 는 직각에서 {off:.1f}° 벗어나 있다. 의도한 장착이면 그대로 쓰고,")
+        print(f"  {best:+.1f}° 는 직각에서 {off:.1f}° 벗어나 있다. 의도한 장착이면 그대로 쓰고,")
         print("  아니면 카메라를 다시 맞춰 다는 게 낫다.")
     return 0
 
