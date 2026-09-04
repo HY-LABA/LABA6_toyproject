@@ -40,11 +40,19 @@
        달려 중심에서 비켜 있으면, 카메라를 지나는 M1 방향 선 위에 서야 한다.
   ③ 화면에서 그 물체를 **마우스로 클릭**한다. 방위각이 바로 표시된다.
   ④ `f` 를 눌러 "이건 전방" 이라고 기록한다.
-  ⑤ 물체를 로봇 **우측**으로 옮기고 다시 클릭 → `r`.  (최소 두 방향은 재야 한다)
+  ⑤ **같은 물체(사람)를 로봇 우측으로 옮겨서 한 번 더 잰다** — 우측에 가서 서고,
+     화면에 찍힌 그 자리를 다시 클릭하고 `r`. (f 와 r 은 서로 다른 두 번의 측정이다)
+     ⚠ **최소 두 방향은 재야 한다.** 하나만으로는 카메라가 돌아간 건지 기울어진
+       건지 구분이 안 된다. 90° 떨어진 두 방향(전방+우측)이 제일 잘 잡아낸다.
+       우측이 곤란하면 후방(`b`)이나 좌측(`l`)도 된다. 셋 넷 다 재도 좋다.
   ⑥ `s` 를 누르면 CAMERA_YAW_RAD 를 풀어서 터미널에 출력한다.
   ⑦ 출력된 줄을 `config.py` 에 붙여넣는다.
 
-  키: f=전방  r=우측  b=후방  l=좌측  s=풀기  c=지우기  q/ESC=종료
+  키: f=전방(M1)  r=우측  b=후방  l=좌측  s=풀기  c=지우기  q/ESC=종료
+
+  ★ 로봇의 "우측"(+X)은 M1 과 M2 사이로 나가는 방향, 즉 M2 쪽이다. 자동차처럼
+    "로봇 뒤에서 M1 쪽을 바라볼 때의 오른손 쪽" 으로 생각하면 된다
+    (config.py 의 body frame 배치도 참고).
 
 디스플레이가 없을 때 (SSH 등)
 -----------------------------
@@ -244,8 +252,9 @@ def live() -> int:
     def on_mouse(event, x, y, _flags, _param):
         if event == cv2.EVENT_LBUTTONDOWN:
             state["marked"] = (float(x), float(y))
-            print(f"  클릭 ({x}, {y}) -> 카메라축 {cam_azimuth_deg(x, y):+.1f}°   "
-                  f"[f=전방 r=우측 b=후방 l=좌측 으로 기록]")
+            print(f"  클릭 ({x}, {y}) -> 카메라축 {cam_azimuth_deg(x, y):+.1f}°")
+            print("    이 물체가 로봇 기준 어느 쪽에 있나? "
+                  "f=전방(M1)  r=우측  b=후방  l=좌측")
 
     print(__doc__.split("쓰는 법 — 실시간 모드 (권장)")[1].split("디스플레이가 없을 때")[0])
     try:
@@ -263,10 +272,15 @@ def live() -> int:
             frame, _t = cam.read()
             img = _annotate(np.ascontiguousarray(frame.copy()),
                             state["marked"], recorded)
-            cv2.putText(img, "click object | f/r/b/l record | s solve | c clear | q quit",
+            cv2.putText(img, "1) click the object   2) press its direction key",
                         (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(img, f"recorded: {len(recorded)}", (10, 56),
+            cv2.putText(img, "f=FRONT(M1)  r=RIGHT  b=BACK  l=LEFT",
+                        (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(img, "s=solve  c=clear  q=quit", (10, 84),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            done = ", ".join(r[0] for r in recorded) or "none"
+            cv2.putText(img, f"recorded ({len(recorded)}): {done}   [need 2+ directions]",
+                        (10, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow(win, img)
 
             key = cv2.waitKey(1) & 0xFF
