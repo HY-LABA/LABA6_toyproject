@@ -208,14 +208,67 @@ def _parse_args():
     p.add_argument("--hold", type=float, default=None, metavar="초",
                    help="--once 와 함께: 딱 한 번만 전송하고 워치독을 이 시간으로 늘린다. "
                         "사이클 끝 STOP도 생략되므로 로봇을 세우는 건 이 시간뿐이다")
+
+    # ── config 덮어쓰기 ──────────────────────────────────────────────────
+    # 없으면 config.py 값을 그대로 쓴다. test_accuracy.py --span/--ratio/--set 와
+    # 같은 방식이다 — 리플레이·실기 튜닝할 때 config.py 를 매번 고치지 않아도 된다.
+    g = p.add_argument_group("트래킹 파라미터 (기본값: config.py)")
+    g.add_argument("--min-time-span", type=float, default=None, metavar="초",
+                   help="config.MIN_TIME_SPAN_S 덮어쓰기 — 최소 관측 스팬")
+    g.add_argument("--max-residual-px", type=float, default=None, metavar="px",
+                   help="config.MAX_RESIDUAL_PX 덮어쓰기 — 재투영 잔차 상한(탄도 게이트)")
+    g.add_argument("--z-range", type=float, nargs=2, default=None, metavar=("MIN", "MAX"),
+                   help="config.Z_RANGE_M 덮어쓰기 — 물리적으로 말이 되는 깊이 범위(m)")
+    g.add_argument("--assoc-step-px", type=float, default=None, metavar="px",
+                   help="config.ASSOC_STEP_PX 덮어쓰기 — 검출을 가설에 붙이는 연관 반경")
+    g.add_argument("--set", action="append", default=[], metavar="KEY=VAL",
+                   help="config 의 아무 값이나 덮어쓴다. 여러 번 쓸 수 있다. "
+                        "예: --set MIN_OBSERVATIONS=6 --set DEPTH_STABILITY_RATIO=1.5")
+
     args = p.parse_args()
     if args.hold is not None and not args.once:
         p.error("--hold 는 --once 와 함께 써야 한다")
     if args.hold is not None and args.hold <= 0:
         p.error("--hold 는 양수여야 한다")
+    if args.z_range is not None and args.z_range[0] >= args.z_range[1]:
+        p.error(f"--z-range 는 MIN < MAX 여야 한다: {args.z_range}")
     return args
+
+
+def _apply_config_overrides(args) -> None:
+    """CLI 로 받은 트래킹 파라미터를 config 모듈에 그대로 덮어쓴다.
+
+    모든 모듈이 `import config` 후 `config.ATTR` 로 매번 읽으므로(값을 지역
+    상수로 캐시하지 않는다), `run()` 을 부르기 전에 여기서 한 번 덮어쓰면 그
+    이후의 모든 접근에 반영된다.
+    """
+    overrides = {
+        "MIN_TIME_SPAN_S": args.min_time_span,
+        "MAX_RESIDUAL_PX": args.max_residual_px,
+        "Z_RANGE_M": tuple(args.z_range) if args.z_range is not None else None,
+        "ASSOC_STEP_PX": args.assoc_step_px,
+    }
+    for name, value in overrides.items():
+        if value is not None:
+            setattr(config, name, value)
+            utils.log(f"[덮어씀] config.{name} = {value}")
+
+    for kv in args.set:
+        if "=" not in kv:
+            raise SystemExit(f"--set 은 KEY=VALUE 형식이어야 한다: {kv!r}")
+        k, v = kv.split("=", 1)
+        k = k.strip()
+        if not hasattr(config, k):
+            raise SystemExit(f"--set: config 에 없는 이름이다: {k}")
+        try:
+            val = float(v) if "." in v or "e" in v.lower() else int(v)
+        except ValueError:
+            val = v
+        setattr(config, k, val)
+        utils.log(f"[덮어씀] config.{k} = {val}")
 
 
 if __name__ == "__main__":
     _args = _parse_args()
+    _apply_config_overrides(_args)
     run(once=_args.once, hold_s=_args.hold)
