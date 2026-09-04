@@ -72,7 +72,7 @@ class Fit:
 
     @property
     def ok(self) -> bool:
-        """**형태가** 말이 되는 해인가. 검사 네 가지:
+        """**형태가** 말이 되는 해인가. 검사 다섯 가지:
 
           ① 유한성          최소제곱이 발산해 nan/inf 가 나오지 않았나
           ② Z_RANGE_M       추정 거리가 물리적으로 말이 되나. 정지한 오탐은 "아주
@@ -83,6 +83,13 @@ class Fit:
           ④ MAX_RESIDUAL_PX 추정 궤적을 다시 화면에 투영했을 때 관측과 몇 px
                             어긋나는가. **이게 탄도 게이트다** — 정지한 점은 어떤
                             포물선으로도 설명이 안 되므로 잔차가 무한대로 튄다
+          ⑤ MAX_LAUNCH_SPEED_MPS  풀린 속도 |v0| 가 사람이 던질 수 있는 범위인가.
+                            ①~④는 전부 관측 구간 **안에서의** 적합도만 본다 — 구간이
+                            짧고 노이즈가 우연히 맞아떨어지면 잔차·조건수는 통과하는데
+                            속도만 비현실적으로 크게 풀리는 경우가 실기에서 확인됐다
+                            (2026-09-04, 배경 오탐 3건에서 |v0| = 10.9~202.4 m/s).
+                            그 속도로 구간 밖(착지 시점)까지 외삽하면 착지점이 수백~
+                            수천 m 밖으로 튄다. tracker.py 모듈 docstring 참고.
 
         ⚠ **깊이가 정확한가는 여기서 판정하지 못한다.** 스케일이 틀린 궤적도 화면에는
           잘 맞게 투영되기 때문이다 (그건 tracker.Tracker._depth_converged 가 본다).
@@ -94,6 +101,7 @@ class Fit:
             and lo <= self.p0[2] <= hi
             and self.condition < config.MAX_CONDITION
             and self.residual_px <= config.MAX_RESIDUAL_PX
+            and float(np.linalg.norm(self.v0)) <= config.MAX_LAUNCH_SPEED_MPS
         )
 
     def position_at(self, dt: float) -> np.ndarray:
