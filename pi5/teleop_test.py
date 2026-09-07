@@ -11,7 +11,37 @@ pico/TODO.md 2번(최대속도·가속시간·정지거리 실측)을 반복 재
     python teleop_test.py --port /dev/ttyACM0                  # 기본 0.5 m/s 상한
     python teleop_test.py --port /dev/ttyACM0 --max-speed 1.8   # 최대속도 실측 시
 
-의존성: pip install pygame pyserial (또는 apt python3-pygame)
+★ 거리 실측 모드 (--go-distance) — 2026-09-07 추가
+----------------------------------------------------
+조이스틱 없이, **정해진 속도로 정해진 거리만큼 직진시키고 자동으로 멈춘 뒤 결과를
+찍어주는 모드.** pico/TODO.md의 "오도메트리 스케일·최대속도·가속도 실측"을 사람이
+스틱으로 어림잡지 않고 반복 가능하게 재려고 만들었다.
+
+    python teleop_test.py --port /dev/ttyACM0 --go-distance 1.0
+
+**원리** — 이 스크립트는 "1m 갔다"를 스스로 증명할 방법이 없다. 로봇은 자기
+오도메트리가 1.0m를 봤다고 판단하는 순간 멈출 뿐이다. 그래서 오도메트리 자체가
+맞는지는 **사람이 줄자로 실제 이동 거리를 재서, 이 스크립트가 출력하는 값과
+비교해야** 확인된다. 화면에 나오는 "오도메트리 기준 이동거리"가 줄자 실측과
+가까우면 인코더 스케일이 맞는 것이고, 계속 짧게/길게 나오면 그 비율만큼
+`pico/config.h`의 `ENCODER_COUNTS_PER_REV`(또는 `WHEEL_DIAMETER_M`)가 틀린 것이다.
+
+같은 실행에서 위치의 시간 미분(오도메트리 pose 차분 — 피코의 텔레메트리 속도
+`odom.vx/vy`는 시정수 ~1.4초짜리 칼만 스무딩이 걸려 있어(`odometry_kalman.c`)
+이런 짧은 구간 측정에는 못 쓴다, 그래서 여기서는 pose로 직접 재계산한다)로
+가속 구간의 도달 속도·도달 시간도 같이 추정해서, 정지 후 관성으로 더 미끄러진
+거리(정지거리)까지 한 번에 보여준다 — 우선순위 1·2·3번(오도메트리·최대속도·가속도
+실측)을 한 스크립트로 커버한다.
+
+    python teleop_test.py --port /dev/ttyACM0 --go-distance 1.0 --test-speed 0.5 --heading 90
+
+`--heading`은 `control.DriveCommand.heading_deg`와 같은 규약이다 — body +X(로봇
+우측)에서 반시계로 재고, 90°가 전방(M1)이다. 기본값 90°(전방)로 두면 보통은
+줄자를 로봇 앞에 놓고 재기 편하다.
+
+의존성: pip install pygame pyserial (또는 apt python3-pygame) — **단, --go-distance
+모드는 조이스틱을 안 쓰므로 pygame이 없어도 동작한다** (아래에서 지연 import로
+분기했다).
 
 컨트롤러는 USB-A로 라즈베리파이에 유선 연결한다. 축 부호가 몸체와 안 맞으면
 (예: 스틱을 앞으로 밀었는데 로봇이 옆으로 감) 실행 중 찍히는 cmd=(vx,vy) 부호를
@@ -77,10 +107,30 @@ def main() -> int:
     ap.add_argument("--invert-x", action="store_true")
     ap.add_argument("--invert-y", action="store_true")
     ap.add_argument("--swap-xy", action="store_true", help="축이 뒤바뀌어 있으면")
+
+    g = ap.add_argument_group("거리 실측 모드 (--go-distance 를 주면 조이스틱 대신 이걸 쓴다)")
+    g.add_argument("--go-distance", type=float, default=None, metavar="M",
+                    help="이 거리(m)만큼 오도메트리 기준으로 직진시키고 자동 정지 후 "
+                         "결과를 출력한다. 주면 조이스틱 모드 대신 이 모드로 진입한다")
+    g.add_argument("--test-speed", type=float, default=0.3, metavar="M/S",
+                    help="--go-distance 에서 낼 순항 속도 (기본 0.3 — 처음엔 낮게)")
+    g.add_argument("--heading", type=float, default=90.0, metavar="DEG",
+                    help="--go-distance 진행 방향(도). control.DriveCommand.heading_deg와 "
+                         "같은 규약: body +X(우측)에서 반시계, 90°=전방(M1). 기본 90°")
+    g.add_argument("--settle-s", type=float, default=0.6, metavar="초",
+                    help="--go-distance 정지 명령 뒤에도 이만큼 더 오도메트리를 받아 "
+                         "정지거리(관성 미끄러짐)를 측정한다 (기본 0.6s)")
+    g.add_argument("--timeout-s", type=float, default=10.0, metavar="초",
+                    help="--go-distance 가 이 시간 안에 목표 거리에 못 미치면 강제 종료 "
+                         "(도달 불가 상황에서 무한 루프 방지, 기본 10s)")
+
     args = ap.parse_args()
 
     if args.port is None:
         sys.exit("--port를 지정할 것 (예: --port /dev/ttyACM0). config.SERIAL_PORT도 아직 비어 있다.")
+
+    if args.go_distance is not None:
+        return _run_distance_test(args)
 
     period = 1.0 / args.hz
     if period >= config.DRIVE_TIMEOUT_S:
@@ -143,6 +193,162 @@ def main() -> int:
         link.close()
         pygame.joystick.quit()
         pygame.quit()
+    return 0
+
+
+def _run_distance_test(args) -> int:
+    """조이스틱 없이 --go-distance 만큼 직진시키고 결과를 출력한다.
+
+    조이스틱 모드와 시리얼 프로토콜을 완전히 공유한다(`communication.py`의
+    `send_command`/`try_receive_odometry`, `control.DriveCommand`) — 여기서 잰
+    값이 실제 캐치 루프(`main.py`)에서도 그대로 유효하다는 근거가 그것이다.
+
+    ⚠ 이 함수는 **오도메트리 자체의 정확도를 증명하지 못한다.** "목표 거리에
+    도달했다"는 판정 자체가 오도메트리를 보고 내리는 판정이라 순환 논리다. 이
+    스크립트가 하는 일은 딱 하나 — **오도메트리가 스스로 "1.0m 갔다"고 믿는 순간을
+    정확히 잡아서 로봇을 세우는 것**뿐이다. 그 순간 로봇이 물리적으로 몇 m
+    갔는지는 사람이 줄자로 재서 이 스크립트의 출력과 비교해야 한다. 그 차이가
+    바로 인코더 스케일 오차다.
+    """
+    import math
+    import time as _time
+
+    import communication
+    import config
+    import control
+
+    heading_rad = math.radians(args.heading)
+    vx_dir, vy_dir = math.cos(heading_rad), math.sin(heading_rad)
+
+    period = 1.0 / 50.0    # 피코 제어주기(20ms)보다 넉넉히 빠르게, 워치독 여유 있게
+    if period >= config.DRIVE_TIMEOUT_S:
+        print(f"⚠ 명령 주기 {period*1000:.0f}ms가 워치독 {config.DRIVE_TIMEOUT_S*1000:.0f}ms"
+              f"보다 느리다 — 명령 사이에 로봇이 자꾸 멈출 수 있다.")
+
+    link = communication.SerialLink(port=args.port)
+
+    def _await_odometry(timeout_s: float = 2.0):
+        """첫 오도메트리가 올 때까지 대기(짧게 폴링). 없으면 None."""
+        deadline = _time.monotonic() + timeout_s
+        while _time.monotonic() < deadline:
+            link.send_command(control.STOP)
+            odom = link.try_receive_odometry()
+            if odom is not None:
+                return odom
+            _time.sleep(0.02)
+        return None
+
+    print(f"시작 전 오도메트리 확인 중...")
+    start_odom = _await_odometry()
+    if start_odom is None:
+        link.close()
+        sys.exit("피코에서 오도메트리를 못 받았다 — 배선/포트/워치독을 확인할 것.")
+
+    x0, y0 = start_odom.x, start_odom.y
+    print(f"시작 pose = ({x0:+.4f}, {y0:+.4f})  "
+          f"목표: {args.go_distance:.3f}m, {args.heading:.0f}° 방향, "
+          f"{args.test_speed:.2f} m/s 순항")
+    print("Ctrl+C로 언제든 중단 가능 (STOP 두 번 보내고 종료).\n")
+
+    # (로컬시각, 오도메트리 pose로부터 계산한 누적 이동거리) 샘플. 정지거리·가속도
+    # 추정에 쓴다. odom.vx/vy(칼만 스무딩, 시정수 ~1.4s)는 이런 <1s 구간 측정엔
+    # 못 미더워서 안 쓴다 — pose 차분으로 직접 속도를 낸다.
+    samples: list[tuple[float, float, float, float]] = []   # (t, dist, x, y)
+    t_start = _time.monotonic()
+    cmd = control.DriveCommand(target_vx=vx_dir * args.test_speed,
+                                target_vy=vy_dir * args.test_speed,
+                                timeout_s=config.DRIVE_TIMEOUT_S)
+
+    next_tick = _time.monotonic()
+    reached_at = None
+    try:
+        while True:
+            now = _time.monotonic()
+            if now - t_start > args.timeout_s:
+                print(f"\n⚠ {args.timeout_s:.0f}초 안에 목표 거리에 못 미쳤다 — 강제 종료.")
+                break
+
+            link.send_command(cmd)
+            odom = link.try_receive_odometry()
+            if odom is not None:
+                dist = math.hypot(odom.x - x0, odom.y - y0)
+                samples.append((now - t_start, dist, odom.x, odom.y))
+                print(f"  t={now - t_start:5.2f}s  오도메트리 이동거리={dist:6.3f}m"
+                      f"  pose=({odom.x:+.3f},{odom.y:+.3f})" + " " * 6, end="\r")
+                if dist >= args.go_distance:
+                    reached_at = now - t_start
+                    break
+
+            next_tick += period
+            sleep_for = next_tick - _time.monotonic()
+            if sleep_for > 0:
+                _time.sleep(sleep_for)
+            else:
+                next_tick = _time.monotonic()
+    except KeyboardInterrupt:
+        print("\n인터럽트 — 정지")
+
+    # ── 정지 + 정지거리(관성 미끄러짐) 측정 ──────────────────────────────
+    link.send_command(control.STOP)
+    _time.sleep(0.05)
+    link.send_command(control.STOP)
+    stop_t = _time.monotonic() - t_start
+    settle_deadline = _time.monotonic() + args.settle_s
+    while _time.monotonic() < settle_deadline:
+        odom = link.try_receive_odometry()
+        if odom is not None:
+            dist = math.hypot(odom.x - x0, odom.y - y0)
+            samples.append((_time.monotonic() - t_start, dist, odom.x, odom.y))
+        _time.sleep(0.02)
+    link.close()
+
+    print("\n" + "=" * 60)
+    if not samples:
+        print("오도메트리 샘플을 하나도 못 받았다 — 측정 실패.")
+        return 1
+
+    final_t, final_dist, final_x, final_y = samples[-1]
+    at_stop = max((s for s in samples if s[0] <= stop_t), key=lambda s: s[0], default=samples[0])
+    overshoot = final_dist - at_stop[1]
+
+    print(f"오도메트리 기준 이동거리 (정지 명령 시점) = {at_stop[1]:.4f} m"
+          f"  (목표 {args.go_distance:.3f}m)")
+    if overshoot > 1e-4:
+        print(f"정지 후 관성으로 더 이동 (정지거리)        = {overshoot:.4f} m"
+              f"  (settle {args.settle_s:.1f}s 동안)")
+    print(f"소요 시간 (시작 -> 정지 명령)                = {stop_t:.3f} s")
+    if stop_t > 1e-6:
+        print(f"평균 속도 (목표거리 / 소요시간)              = {args.go_distance / stop_t:.3f} m/s"
+              f"  (명령 속도 {args.test_speed:.2f} m/s 대비 "
+              f"{100*(args.go_distance/stop_t)/args.test_speed:.0f}%)")
+
+    # 가속 구간 추정: 연속 샘플 간 pose 차분으로 순간속도를 내고, 순항속도의
+    # 90%에 처음 도달한 시각을 '가속 완료 시각'으로 잡는다 (거친 추정 — 짧은
+    # 구간 유한차분이라 노이즈가 있다. 참고용으로만 쓸 것).
+    target_v90 = 0.9 * args.test_speed
+    rise_t = None
+    for i in range(1, len(samples)):
+        t_a, d_a, _, _ = samples[i - 1]
+        t_b, d_b, _, _ = samples[i]
+        if t_b <= t_a or t_b > stop_t:
+            continue
+        v = (d_b - d_a) / (t_b - t_a)
+        if v >= target_v90:
+            rise_t = t_b
+            break
+    if rise_t is not None:
+        print(f"순항속도 90%(={target_v90:.2f} m/s) 도달 시각         = {rise_t:.3f} s"
+              f"  (대략적 가속도 추정 ≈ {target_v90 / rise_t:.2f} m/s²  — 유한차분 기반, 참고용)")
+    else:
+        print("순항속도 90%에 도달한 기록을 못 찾았다 — 거리/속도가 너무 작거나 "
+              "샘플 간격이 성기다.")
+
+    print("=" * 60)
+    print("다음 단계: 줄자로 로봇이 실제로 이동한 거리를 재서 위 "
+          f"'오도메트리 기준 이동거리'({at_stop[1]:.3f}m)와 비교할 것.")
+    print("  실측이 이보다 짧다 -> 피코가 실제보다 더 갔다고 과대보고 -> 그 비율만큼")
+    print("                        캐치 목표점에 못 미친다 (지금 겪는 증상과 같은 방향).")
+    print("  실측이 이보다 길다 -> 피코가 과소보고 -> 캐치가 오버슈트하는 방향.")
     return 0
 
 

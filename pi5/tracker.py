@@ -252,7 +252,7 @@ class Tracker:
         return self.uvs[-1] if self.uvs else None
 
     # ── 결과 ──────────────────────────────────────────────────────────────
-    def landing(self):
+    def landing(self, now: float | None = None):
         """(x, y, 남은시간) 또는 None.
 
         x, y는 **이 가설이 시작된 시점의 로봇 중심**을 원점으로 한, **로봇 body 축**
@@ -262,6 +262,18 @@ class Tracker:
           (`cam_to_robot`). 이 함수 바깥(`_reach`, `control.to_target_command`,
           `control.to_drive_command`)은 전부 로봇 축 세계다 — 거기서 오도메트리와
           더하고 빼는 게 그래서 성립한다.
+
+        ⚠ 남은 시간 기준 시각 (2026-09-07 수정)
+        ------------------------------------------
+        `now`를 주면 **그 시각 기준** 남은시간을 돌려준다 — 실시간 구동은 항상 이걸
+        써야 한다. 안 주면(레거시) 마지막 관측 시각(`self.times[-1]`) 기준인데,
+        물체가 화면 밖으로 나가 관측이 끊기면 `times[-1]`이 그 순간에 멈춰버려서
+        **남은 시간이 실제로는 줄고 있는데 그대로 얼어붙는다.** 그 얼어붙은 값을
+        피코에 보내면(`TargetCommand.time_remaining_s`) 피코가 실제보다 여유
+        있다고 믿고 느리게 간다 — 가장 서둘러야 할 마지막 구간에서 오히려 늦어지는
+        구조적 버그였다. `viable` 프로퍼티처럼 "존재 여부"만 보는 곳은 `now` 없이
+        불러도 안전하다(x, y 자체는 `now`와 무관하다 — `fit.t0`와 `dt_from_t0`로만
+        정해진다).
         """
         if self.fit is None:
             return None
@@ -270,9 +282,8 @@ class Tracker:
             return None
         x, y, dt_from_t0 = out
         x, y = cam_to_robot(x, y)           # 카메라 축 -> 로봇 body 축
-        # 남은 시간은 마지막 관측 시각 기준으로 환산해 준다 —
-        # 호출부는 "지금부터 몇 초 남았나"로 판단해야 하기 때문.
-        return x, y, self.fit.t0 + dt_from_t0 - self.times[-1]
+        ref_t = now if now is not None else self.times[-1]
+        return x, y, self.fit.t0 + dt_from_t0 - ref_t
 
     @property
     def viable(self) -> bool:
@@ -350,7 +361,19 @@ class TrackerPool:
         if time_remaining is not None and time_remaining <= 0.0:
             return "착지 시각 경과"
         c = self.committed
-        if c is not None and c.last_seen is not None:
+        # ⚠ 2026-09-07 수정: 확정된 물리 해(fit)가 있는 트랙은 화면 밖으로 나가도
+        # "유실"로 끝내지 않는다. 천장 카메라 특성상 물체는 **착지 직전 반드시
+        # 화면을 벗어난다**(u=fx·X/Z가 Z→0에서 발산) — 실측 어안 계수 기준
+        # 착지 0.05~0.19초 전. TRACK_MAX_GAP_S(0.15s)가 그 구간과 겹쳐서, 정상적으로
+        # 잘 던진 진짜 낙하물도 착지 직전에 "유실"로 사이클이 끝나고 STOP이 나갔다.
+        # 게다가 그 사이 YOLO가 몇 프레임만 놓쳐도(32fps에서 5프레임=0.15s) 물체가
+        # 화면 한복판에 있어도 같은 일이 벌어졌다. fit이 있다는 건 물리로 이미 확정된
+        # 궤적이 있다는 뜻이므로, 그 경우엔 "착지 시각 경과"(위 분기, now 기준으로
+        # 고쳐졌으므로 이제 정확하다)와 CYCLE_TIMEOUT_S(2.0s, 아래)만으로 끝낸다.
+        # 아직 fit이 없는 트랙(오탐 후보가 물리를 못 만족해 계속 붙잡고 있는 경우)은
+        # 기존대로 유실 처리한다 — 그런 트랙은 화면에 계속 보여야 다음 프레임에
+        # 다시 풀릴 여지가 있으므로, 안 보이면 놓아주는 게 맞다.
+        if c is not None and c.fit is None and c.last_seen is not None:
             gap = now - c.last_seen
             if gap > config.TRACK_MAX_GAP_S:
                 return f"물체 유실 ({gap:.2f}s)"
@@ -424,7 +447,7 @@ class TrackerPool:
         for tr in self.tracks:
             if not tr.viable:
                 continue
-            r = self._reach(tr, odom_xy)
+            r = self._reach(tr, odom_xy, now)
             if r is None:
                 continue
             ok, need, remaining = r
@@ -451,14 +474,17 @@ class TrackerPool:
             self.state = TRACKING
             self.started_at = now
 
-    def _reach(self, track: Tracker, odom_xy) -> tuple[bool, float, float] | None:
+    def _reach(self, track: Tracker, odom_xy, now: float) -> tuple[bool, float, float] | None:
         """`(도달 가능한가, 필요 속력, 남은 시간)`. 착지해가 없으면 None.
 
         "도달 가능"은 **남은 거리를 남은 시간 안에 갈 수 있는가**다. 이걸 봐야
         동시에 두 개가 날아올 때 **잡을 수 있는 쪽**을 고를 수 있다. 잔차가 제일
         작은 걸 고르는 건 "가장 확실한 궤적"이지 "가장 잡기 쉬운 것"이 아니다.
+
+        ⚠ `now`를 반드시 넘겨야 한다 — `Tracker.landing()` 참고. 안 넘기면 물체가
+          안 보이는 동안 남은 시간이 얼어붙어 도달 판정이 실제보다 낙관해진다.
         """
-        out = track.landing()
+        out = track.landing(now)
         if out is None:
             return None
         lx, ly, remaining = out
@@ -490,7 +516,7 @@ class TrackerPool:
         self.tick(now)
         self.update(detections, odom_xy, now)
         track = self.best()
-        landing = track.landing() if track is not None else None
+        landing = track.landing(now) if track is not None else None
         remaining = landing[2] if landing is not None else None
         return track, landing, self.cycle_end_reason(now, remaining)
 
