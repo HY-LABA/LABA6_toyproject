@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(python -m py_compile pi5\\\\prep\\\\train_yolo.py && \"compile OK\"; \"--- help ---\"; python pi5\\\\prep\\\\train_yolo.py --help; \"--- resume 경로 없음 ---\"; python pi5\\\\prep\\\\train_yolo.py --resume nope.pt; \"exit=$LASTEXITCODE\")"
+      "Bash(git commit -m ' *)",
+      "Bash(git checkout *)",
+      "Bash(python -c ' *)",
+      "Bash(git branch *)",
+      "Bash(git pull *)"
     ]
   }
 }
