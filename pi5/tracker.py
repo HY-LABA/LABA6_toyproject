@@ -542,7 +542,11 @@ class TrackerPool:
             us = [uv[0] for uv in tr.uvs]
             vs = [uv[1] for uv in tr.uvs]
             disp = math.hypot(max(us) - min(us), max(vs) - min(vs))
-            if disp < config.MIN_TRACK_DISPLACEMENT_PX:
+            # ★ 누적량이 아니라 **화면 이동속도**로 거른다. 누적 40px 을 기다리면
+            #   물체가 멀리 있는 초반에 6프레임이 걸리는데, 속도로 보면 3프레임이면
+            #   갈린다 (실제 406~773 px/s vs 정지 오탐 56~302 px/s).
+            span = tr.time_span
+            if span <= 1e-6 or disp / span < config.EARLY_START_MIN_PX_PER_S:
                 continue
             du = tr.uvs[-1][0] - tr.uvs[0][0]
             dv = tr.uvs[-1][1] - tr.uvs[0][1]
