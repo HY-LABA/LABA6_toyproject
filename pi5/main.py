@@ -364,15 +364,23 @@ def _apply_config_overrides(args) -> None:
     if getattr(args, "no_gates", False):
         # ★ 게이트를 전부 연다. "얼마나 빨리 나갈 수 있나" 를 보려는 모드다.
         #   오탐도 같이 통과하므로 실전용이 아니다 — 껐다 켜며 비교하는 용도다.
+        #   ⚠ MIN_TIME_SPAN_S 와 Z_RANGE_M 은 **일부러 안 푼다.** 처음 시도에서 둘 다
+        #     풀었더니 오히려 로봇이 한 틱 가고 멈췄다. 이유:
+        #       관측 4개(스팬 0.05s)만으로 fit 이 나오는데 그 깊이가 참값의 15% 다
+        #       (실측 시뮬: 참 2.40m -> z=0.362m). 그러면 착지점도 같은 비율로 줄어
+        #       **목표가 16cm 앞**, 남은시간 0.027초로 나온다. 이미 조기출발로 그만큼
+        #       가속해 달리던 로봇은 도착 판정(POSITION_TOLERANCE_M)에 걸려 즉시 서고,
+        #       다음 프레임엔 t_rem 이 음수라 "착지 시각 경과"로 사이클까지 끝난다.
+        #     즉 이 둘은 오탐을 거르는 게이트가 아니라 **fit 이 의미를 갖기 위한 최소
+        #     조건**이라, 풀면 쓰레기 fit 이 조기출발의 올바른 방향을 덮어쓴다.
+        #     여기서 푸는 건 "진짜인지 아닌지" 를 따지는 게이트들뿐이다.
         loose = {
             "MIN_TRACK_DISPLACEMENT_PX": 0.0,   # 정지 오탐 사전 차단 해제
             "MAX_RESIDUAL_PX": 1e6,             # 탄도 게이트 해제
             "MAX_LAUNCH_SPEED_MPS": 1e6,        # 투척 속도 상한 해제
             "MAX_CONDITION": 1e30,              # 조건수 해제
-            "Z_RANGE_M": (0.01, 100.0),         # 깊이 범위 해제
             "DEPTH_STABILITY_RATIO": 1e9,       # 깊이 수렴 검사 해제
-            "MIN_TIME_SPAN_S": 0.0,             # 스팬 하한 해제
-            "MIN_OBSERVATIONS": 4,              # 최소제곱에 필요한 최소치 (더 못 낮춤)
+            "MIN_TIME_SPAN_S": 0.10,            # 하한만 절반으로 (0 으로 풀면 위 문제)
         }
         for k, v in loose.items():
             setattr(config, k, v)
