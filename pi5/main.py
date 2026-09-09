@@ -118,6 +118,17 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
             if landing is not None:
                 landing_x, landing_y, time_remaining = landing
 
+                # ★ 목표가 너무 가까우면 **방향만 살리고 거리를 늘린다.**
+                #   초반 깊이는 참값의 15~25% 라 착지점이 "16cm 앞" 처럼 나오고, 그러면
+                #   로봇이 그만큼 가다 도착 판정에 걸려 선다 — 실제 착지는 훨씬 멀리인데.
+                #   방향은 깊이와 무관하게 정확하므로 방향만 믿고 거리를 깐다.
+                #   기준은 트랙 시작 시점의 로봇 위치다(착지점이 원래 그 기준이라,
+                #   현재 위치 기준으로 하면 목표가 계속 밀려나 영원히 못 잡는다).
+                _d = math.hypot(landing_x, landing_y)
+                if 1e-6 < _d < config.MIN_TARGET_DIST_M:
+                    _k = config.MIN_TARGET_DIST_M / _d
+                    landing_x, landing_y = landing_x * _k, landing_y * _k
+
                 # ── ⑤ 명령 — 도착 지점(월드 좌표)만 보낸다 ──────────────
                 #    매 프레임 다시 푼다. --once 여도 계산은 계속한다 —
                 #    첫 예측과의 차이가 곧 깊이 편향의 크기이고, 그게 이 테스트로
