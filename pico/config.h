@@ -67,12 +67,19 @@ static const float WHEEL_ANGLES_RAD[NUM_MOTORS] = {
 
 // 모터별 부호 보정. wheel_speed_from_encoder_delta 결과와 motor_control의
 // PWM 출력 양쪽에 곱해서 명령-측정 부호를 맞춘다.
-// MicroPython 벤치 테스트(2026-09) 결과: x,y 이동 방향이 커맨드와 정반대로
-// 나와서 모터 3개 전부 -1로 보정. PID가 안정적으로(폭주 없이) 수렴하면서
-// 방향만 반대였던 걸로 봐서 개별 모터 배선 실수가 아니라 3개 다 일관된
-// 방향 규칙(어느 쪽이었든)이 공식 가정과 정반대였던 것 — 원인 특정은 안 됐지만
-// 이 보정으로 완전히 해결됨.
-static const int MOTOR_SIGN[NUM_MOTORS] = {-1, -1, -1};
+// MicroPython 벤치 테스트(2026-09)에서 x,y 이동 방향이 커맨드와 정반대라
+// 3개 전부 -1로 보정했었다. 그런데 C 펌웨어 실기(pi5/pico_test.py)에서는 그
+// 상태가 오히려 반대 방향이라 +1 로 되돌린다 — 벤치와 실기의 배선/조립이
+// 달랐던 것으로 보인다.
+//
+// ⚠ 이 부호는 엔코더 입력과 PWM 출력 **양쪽에** 곱해지므로 뒤집어도 PID 는
+//   자기 자신과 그대로 맞물려 돌고 오도메트리 보고값도 안 바뀐다. 바뀌는 건
+//   **로봇이 실제로 가는 방향뿐**이다 (pi5/pico_test.py docstring 참고).
+//   그래서 판정은 반드시 눈으로 본 방향으로 해야 한다.
+// ⚠ 3개를 통째로 뒤집으면 vx, vy 와 함께 omega(제자리 회전)도 같이 뒤집힌다.
+//   지금은 omega 를 명령하지 않아(TargetCommand/DriveCommand 에 없다) 문제가
+//   없지만, 회전을 쓰기 시작하면 여기부터 다시 확인할 것.
+static const int MOTOR_SIGN[NUM_MOTORS] = {1, 1, 1};
 
 // 실측 확정값 (2026-09, MicroPython 테스트 리그 · encoder_test.py 핸드오프 문서).
 // 데이터시트 표기(16 CPR 모터축)는 부정확한 것으로 확인됨 — 손회전/정밀정지
