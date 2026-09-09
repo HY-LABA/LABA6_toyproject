@@ -518,6 +518,42 @@ class TrackerPool:
         limit = control.max_body_speed(rx, ry) * config.REACH_MARGIN
         return (need <= limit, need, remaining)
 
+    def early_bearing(self) -> tuple[float, float] | None:
+        """아직 fit 이 없을 때 **"일단 갈 방향"** 만 준다. 로봇 body 축 단위벡터.
+
+        깊이는 몰라도 방향은 안다 — 카메라가 하늘을 보므로 화면상 위치가 곧 방위각
+        이고, 그건 깊이와 무관하게 정확하다. 그래서 물체가 화면에서 흘러가는 방향
+        (첫 관측 -> 마지막 관측)을 로봇 축으로 돌려주면 그게 갈 방향이다.
+
+        ★ 현재 위치가 아니라 **이동 방향**을 쓴다. 물체는 처음엔 카메라 반대편
+          하늘에 있다가 머리 위를 지나 착지점 쪽으로 넘어가므로, 초반의 "현재 방위각"
+          은 오히려 정반대를 가리킨다. 실기 로그에서도 v 가 182(뒤) -> 951(앞) 로
+          흘렀고 실제 착지는 앞이었다 — 이동 방향이 맞고 현재 위치는 틀린다.
+
+        ⚠ 게이트는 `MIN_TRACK_DISPLACEMENT_PX` 하나뿐이다. 이 단계엔 fit 이 없어서
+          물리 게이트를 못 쓰고, 그건 깊이가 필요 없는 유일한 판정이기 때문이다.
+          실제 낙하물은 프레임당 100px 넘게 움직여 3프레임이면 여유로 넘고, 정지
+          오탐은 관측 구간 전체에서 2~7px 라 못 넘는다.
+        """
+        best = None
+        for tr in self.tracks:
+            if tr.n < config.EARLY_START_OBS:
+                continue
+            us = [uv[0] for uv in tr.uvs]
+            vs = [uv[1] for uv in tr.uvs]
+            disp = math.hypot(max(us) - min(us), max(vs) - min(vs))
+            if disp < config.MIN_TRACK_DISPLACEMENT_PX:
+                continue
+            du = tr.uvs[-1][0] - tr.uvs[0][0]
+            dv = tr.uvs[-1][1] - tr.uvs[0][1]
+            norm = math.hypot(du, dv)
+            if norm < 1e-6:
+                continue
+            # 가장 크게 움직인 가설을 고른다 — 가장 확실히 "날아가는 것"이다.
+            if best is None or disp > best[0]:
+                best = (disp, cam_to_robot(du / norm, dv / norm))
+        return None if best is None else best[1]
+
     def best(self) -> Tracker | None:
         """채택된 가설. `update()`가 이미 정해뒀다."""
         return self.committed

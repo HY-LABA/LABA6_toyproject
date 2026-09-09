@@ -90,6 +90,7 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
     #   던져진 물체는 탄도라 안 보인다고 궤적이 바뀌지 않는다. 그리고 물체는 거의
     #   항상 착지 직전에 시야에서 사라진다 — 즉 로봇이 제일 움직여야 할 때 놓친다.
     #   예전에는 그때 STOP 을 보내 목표 한참 못 미쳐 서 버렸다.
+    early_logged = False     # 조기 출발 로그를 사이클당 한 번만
     drive_target = None      # 계속 보낼 목표점 (트랙이 죽어도 유지)
     drive_target_at = 0.0    # 그 목표를 만든 시각 — 남은시간을 실제로 깎기 위해
     drive_deadline = 0.0     # 이 시각을 넘기면 포기하고 정지 (안전장치)
@@ -192,6 +193,26 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
                     link.send_target(control.held_target(drive_target,
                                                          now - drive_target_at))
 
+            elif not single_packet:
+                # ── ④' 조기 출발 — fit 이 아직 없다. **방향만으로 먼저 나간다** ──
+                #    깊이는 몰라도 방향은 안다(카메라가 하늘을 보므로 화면 위치가 곧
+                #    방위각이다). 완전한 fit 을 기다리면 물체가 이미 머리 위를 지난
+                #    뒤라, 방향만 맞게 미리 가속해서 모터 지연을 먹어치운다.
+                #    진짜 fit 이 나오면 위 분기가 목표를 덮어쓴다.
+                bearing = pool.early_bearing()
+                if bearing is not None:
+                    d = config.EARLY_START_DIST_M
+                    link.send_target(control.TargetCommand(
+                        target_x=odom_xy[0] + bearing[0] * d,
+                        target_y=odom_xy[1] + bearing[1] * d,
+                        time_remaining_s=0.05,      # 아주 짧게 = 최고속도로 붙어라
+                        timeout_s=config.DRIVE_TIMEOUT_S))
+                    commanded = True
+                    if not early_logged:
+                        early_logged = True
+                        utils.log(f"조기 출발 — 방향 ({bearing[0]:+.2f},{bearing[1]:+.2f}), "
+                                  f"fit 없이 화면 이동방향만으로 가속")
+
             # ── ⑥ 사이클 종료 ───────────────────────────────────────────
             if reason:
                 # 채택된 궤적이 있었으면 그 관측 수·스팬이 의미가 있고, 없었으면
@@ -207,6 +228,7 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
                 #   0.8초를 쉬는 건 그 사이 날아오는 걸 놓치는 것뿐이다.
                 pool.reset(now, reason, cooldown=commanded)
                 first_target = None
+                early_logged = False
                 if commanded:
                     # 단발 모드에서는 세우지 않는다 — 워치독 hold_s 가 끝까지
                     # 가게 두는 게 이 모드의 목적이다. 정지는 워치독이 한다.
@@ -287,6 +309,10 @@ def _parse_args():
     p.add_argument("--once", action="store_true",
                    help="사이클마다 첫 예측만 쓴다. 이후 프레임의 재계산은 로그만 남기고 "
                         "보내지 않는다 (기본: 고정한 목표점을 계속 재전송)")
+    p.add_argument("--no-gates", action="store_true",
+                   help="물리 게이트를 전부 풀어서 **최대한 빨리** 출발한다. 잔차·깊이범위"
+                        "·속도상한·수렴검사·이동량 문턱을 다 열고 스팬 하한도 최소로 "
+                        "낮춘다. 오탐도 같이 통과하므로 속도를 우선 확인할 때만 쓸 것")
     p.add_argument("--hold", type=float, default=None, metavar="초",
                    help="--once 와 함께: 딱 한 번만 전송하고 워치독을 이 시간으로 늘린다. "
                         "사이클 끝 STOP도 생략되므로 로봇을 세우는 건 이 시간뿐이다")
@@ -334,6 +360,23 @@ def _apply_config_overrides(args) -> None:
         if value is not None:
             setattr(config, name, value)
             utils.log(f"[덮어씀] config.{name} = {value}")
+
+    if getattr(args, "no_gates", False):
+        # ★ 게이트를 전부 연다. "얼마나 빨리 나갈 수 있나" 를 보려는 모드다.
+        #   오탐도 같이 통과하므로 실전용이 아니다 — 껐다 켜며 비교하는 용도다.
+        loose = {
+            "MIN_TRACK_DISPLACEMENT_PX": 0.0,   # 정지 오탐 사전 차단 해제
+            "MAX_RESIDUAL_PX": 1e6,             # 탄도 게이트 해제
+            "MAX_LAUNCH_SPEED_MPS": 1e6,        # 투척 속도 상한 해제
+            "MAX_CONDITION": 1e30,              # 조건수 해제
+            "Z_RANGE_M": (0.01, 100.0),         # 깊이 범위 해제
+            "DEPTH_STABILITY_RATIO": 1e9,       # 깊이 수렴 검사 해제
+            "MIN_TIME_SPAN_S": 0.0,             # 스팬 하한 해제
+            "MIN_OBSERVATIONS": 4,              # 최소제곱에 필요한 최소치 (더 못 낮춤)
+        }
+        for k, v in loose.items():
+            setattr(config, k, v)
+        utils.log("⚠ --no-gates — 물리 게이트를 전부 풀었다. 오탐도 그대로 통과한다")
 
     for kv in args.set:
         if "=" not in kv:
