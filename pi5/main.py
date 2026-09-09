@@ -86,6 +86,14 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
     first_target = None      # --once: 이 사이클에서 처음 보낸 목표점
     first_target_at = 0.0
 
+    # ★ coast — 물체를 놓쳐도 마지막 목표점까지는 계속 간다 (config.COAST_EXTRA_S).
+    #   던져진 물체는 탄도라 안 보인다고 궤적이 바뀌지 않는다. 그리고 물체는 거의
+    #   항상 착지 직전에 시야에서 사라진다 — 즉 로봇이 제일 움직여야 할 때 놓친다.
+    #   예전에는 그때 STOP 을 보내 목표 한참 못 미쳐 서 버렸다.
+    drive_target = None      # 계속 보낼 목표점 (트랙이 죽어도 유지)
+    drive_target_at = 0.0    # 그 목표를 만든 시각 — 남은시간을 실제로 깎기 위해
+    drive_deadline = 0.0     # 이 시각을 넘기면 포기하고 정지 (안전장치)
+
     single_packet = once and hold_s is not None
 
     utils.log("catch loop start" + (
@@ -145,13 +153,39 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
                         first_target = target
                         first_target_at = now
 
+                # ★ 트랙이 죽어도 여기까지는 간다. 착지 예정 시각 + 여유시간까지.
+                drive_target = target
+                drive_target_at = now
+                drive_deadline = now + max(time_remaining, 0.0) + config.COAST_EXTRA_S
+
+            elif drive_target is not None and not single_packet:
+                # ── coast — 물체는 안 보이는데 목표가 살아 있다 ──────────────
+                #    피코 오도메트리(엔코더)로 남은거리를 보고, 도착하거나 시간이
+                #    다 될 때까지 같은 목표점을 계속 보낸다.
+                remain = math.hypot(drive_target.target_x - odom_xy[0],
+                                    drive_target.target_y - odom_xy[1])
+                if remain <= config.POSITION_TOLERANCE_M:
+                    link.send_command(control.STOP)
+                    utils.log(f"coast 도착 — 목표까지 {remain * 100:.1f}cm")
+                    drive_target, commanded = None, False
+                elif now >= drive_deadline:
+                    link.send_command(control.STOP)
+                    utils.log(f"coast 종료(시간초과) — 목표까지 {remain * 100:.1f}cm 남음")
+                    drive_target, commanded = None, False
+                else:
+                    link.send_target(control.held_target(drive_target,
+                                                         now - drive_target_at))
+
                 # 속도는 보내지 않지만(피코가 계산한다) **예측치를 로그에 남긴다** —
                 # 어느 바퀴가 한계에 붙었는지 봐야 튜닝이 되고, 실기에서 피코가 실제로
                 # 낸 속도(오도메트리 회신)와 이 예측을 비교하면 양쪽 식이 갈렸는지
                 # 바로 보인다. 붙은 바퀴엔 ! 표시.
+                #    ⚠ 피코에 **실제로 보낸** 남은시간을 써야 한다. config.DRIVE_AGGRESSION
+                #      때문에 보내는 값이 raw 와 다른데, 여기서 raw 를 쓰면 로그가
+                #      실제보다 느린 속도를 찍어서 "왜 로그랑 다르지"가 된다.
                 predicted = control.to_drive_command(
                     landing_xy=(landing_x, landing_y),
-                    time_remaining=time_remaining,
+                    time_remaining=target.time_remaining_s,
                     odometry_xy=pool.moved_since_start(odom_xy),
                 )
                 utils.log_cycle(track.fit, (landing_x, landing_y), time_remaining,
@@ -172,9 +206,18 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
                     # 가게 두는 게 이 모드의 목적이다. 정지는 워치독이 한다.
                     if single_packet:
                         utils.log("단발 모드 — 사이클 끝 STOP 생략 (워치독이 세운다)")
+                        commanded = False
+                    elif drive_target is not None:
+                        # ★ 여기서 세우지 않는다. 트랙은 죽었어도 목표점은 살아 있고,
+                        #   탄도라 예측은 여전히 유효하다. 정지는 위 coast 분기가
+                        #   **도착했을 때** 또는 **시간이 다 됐을 때** 판단한다.
+                        remain = math.hypot(drive_target.target_x - odom_xy[0],
+                                            drive_target.target_y - odom_xy[1])
+                        utils.log(f"  coast 계속 — 목표까지 {remain * 100:.1f}cm, "
+                                  f"{drive_deadline - now:.2f}s 남음")
                     else:
                         link.send_command(control.STOP)
-                    commanded = False
+                        commanded = False
     except KeyboardInterrupt:
         utils.log("interrupted")
     finally:

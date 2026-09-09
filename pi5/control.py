@@ -167,7 +167,12 @@ def to_target_command(landing_xy: tuple[float, float], origin_odom: tuple[float,
     return TargetCommand(
         target_x=landing_xy[0] + origin_odom[0],
         target_y=landing_xy[1] + origin_odom[1],
-        time_remaining_s=time_remaining,
+        # ★ 남은시간을 DRIVE_AGGRESSION 으로 나눠서 보낸다 (2026-09-07).
+        #   피코는 `속도 = 남은거리 ÷ 남은시간` 이므로, 남은시간을 줄여 보내면 그만큼
+        #   빨리 간다. 8.0 이면 사실상 "항상 최대속도" 이고, 어차피 피코가 방향별
+        #   바퀴 상한으로 자르므로 못 내는 속도를 요구하는 일은 없다.
+        #   근거와 튜닝 기준은 config.DRIVE_AGGRESSION 주석 참고.
+        time_remaining_s=time_remaining / config.DRIVE_AGGRESSION,
         timeout_s=config.DRIVE_TIMEOUT_S,
     )
 
