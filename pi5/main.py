@@ -194,8 +194,14 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
 
             # ── ⑥ 사이클 종료 ───────────────────────────────────────────
             if reason:
-                utils.log(f"cycle end — {reason} (관측 {pool.n}, "
-                          f"스팬 {pool.time_span:.2f}s, 가설 {pool.n_tracks}개)")
+                # 채택된 궤적이 있었으면 그 관측 수·스팬이 의미가 있고, 없었으면
+                # (오탐만 잡고 있던 경우) 0 이 찍혀서 오히려 헷갈린다 — 나눠 찍는다.
+                if pool.best() is not None:
+                    utils.log(f"cycle end — {reason} (관측 {pool.n}, "
+                              f"스팬 {pool.time_span:.2f}s, 가설 {pool.n_tracks}개)")
+                else:
+                    utils.log(f"cycle end — {reason} "
+                              f"(가설 {pool.n_tracks}개, 전부 물리 게이트 탈락)")
                 # ★ 움직이지 않았으면 COOLDOWN 없이 바로 다음 궤적을 기다린다.
                 #   COOLDOWN은 "움직인 뒤 관성/튐"을 위한 것이라, 가만히 있었으면
                 #   0.8초를 쉬는 건 그 사이 날아오는 걸 놓치는 것뿐이다.

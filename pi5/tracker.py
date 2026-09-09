@@ -325,6 +325,10 @@ class TrackerPool:
         self.state: str = IDLE
         self.started_at: float | None = None
         self.ended_at: float | None = None
+        # ★ 가설이 처음 생긴 시각 — **채택 여부와 무관**하다.
+        #   `started_at` 은 물리를 통과한 궤적이 채택된 시각이라, 오탐만 잡고 있으면
+        #   영원히 None 이고 그래서 타임아웃이 안 돈다. 그 구멍을 메우는 값이다.
+        self.tracks_since: float | None = None
 
     # ── 사이클 ────────────────────────────────────────────────────────────
     def tick(self, now: float) -> None:
@@ -346,6 +350,7 @@ class TrackerPool:
         self.tracks.clear()
         self.committed = None
         self.started_at = None
+        self.tracks_since = None
         self.ended_at = now
         self.state = COOLDOWN if (now is not None and cooldown) else IDLE
         return reason
@@ -357,6 +362,15 @@ class TrackerPool:
         것이므로 타임아웃만 본다 — 오탐만 잔뜩 잡고 있는 상태에서 빠져나오는 길이다.
         """
         if self.state != TRACKING:
+            # ★ 채택 전에도 타임아웃을 본다 (2026-09-07).
+            #   예전에는 여기서 바로 None 을 돌려줘서, **천장 오탐만 잡고 있는 상태는
+            #   영원히 타임아웃되지 않았다** — state 가 IDLE 이라 `started_at` 이 None 이고
+            #   아래 CYCLE_TIMEOUT_S 검사에 도달하지도 못했다. 그래서 사이클이 끝났다는
+            #   로그도 안 찍혀서 터미널이 조용했다.
+            #   이제는 가설이 생긴 지 CYCLE_TIMEOUT_S 를 넘기면 통째로 리셋한다.
+            if (self.tracks_since is not None
+                    and now - self.tracks_since > config.CYCLE_TIMEOUT_S):
+                return f"미채택 타임아웃 ({now - self.tracks_since:.2f}s, 채택된 궤적 없음)"
             return None
         if time_remaining is not None and time_remaining <= 0.0:
             return "착지 시각 경과"
@@ -427,6 +441,13 @@ class TrackerPool:
         if len(self.tracks) > config.MAX_TRACKS:
             self.tracks.sort(key=lambda tr: (tr is not self.committed, -tr.n))
             self.tracks = self.tracks[:config.MAX_TRACKS]
+
+        # ④' 가설이 언제부터 있었나 — 채택 전 타임아웃 판정용
+        if self.tracks:
+            if self.tracks_since is None:
+                self.tracks_since = now
+        else:
+            self.tracks_since = None
 
         # ⑤ 채택
         self._commit(now, odom_xy)
