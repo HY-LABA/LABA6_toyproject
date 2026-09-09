@@ -158,6 +158,22 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
                 drive_target_at = now
                 drive_deadline = now + max(time_remaining, 0.0) + config.COAST_EXTRA_S
 
+                # 속도는 보내지 않지만(피코가 계산한다) **예측치를 로그에 남긴다** —
+                # 어느 바퀴가 한계에 붙었는지 봐야 튜닝이 되고, 실기에서 피코가 실제로
+                # 낸 속도(오도메트리 회신)와 이 예측을 비교하면 양쪽 식이 갈렸는지
+                # 바로 보인다. 붙은 바퀴엔 ! 표시.
+                #    ⚠ 피코에 **실제로 보낸** 남은시간을 써야 한다. config.DRIVE_AGGRESSION
+                #      때문에 보내는 값이 raw 와 다른데, 여기서 raw 를 쓰면 로그가
+                #      실제보다 느린 속도를 찍어서 "왜 로그랑 다르지"가 된다.
+                predicted = control.to_drive_command(
+                    landing_xy=(landing_x, landing_y),
+                    time_remaining=target.time_remaining_s,
+                    odometry_xy=pool.moved_since_start(odom_xy),
+                )
+                utils.log_cycle(track.fit, (landing_x, landing_y), time_remaining,
+                                odom_xy, predicted, target)
+                utils.log(control.describe(predicted))
+
             elif drive_target is not None and not single_packet:
                 # ── coast — 물체는 안 보이는데 목표가 살아 있다 ──────────────
                 #    피코 오도메트리(엔코더)로 남은거리를 보고, 도착하거나 시간이
@@ -175,22 +191,6 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
                 else:
                     link.send_target(control.held_target(drive_target,
                                                          now - drive_target_at))
-
-                # 속도는 보내지 않지만(피코가 계산한다) **예측치를 로그에 남긴다** —
-                # 어느 바퀴가 한계에 붙었는지 봐야 튜닝이 되고, 실기에서 피코가 실제로
-                # 낸 속도(오도메트리 회신)와 이 예측을 비교하면 양쪽 식이 갈렸는지
-                # 바로 보인다. 붙은 바퀴엔 ! 표시.
-                #    ⚠ 피코에 **실제로 보낸** 남은시간을 써야 한다. config.DRIVE_AGGRESSION
-                #      때문에 보내는 값이 raw 와 다른데, 여기서 raw 를 쓰면 로그가
-                #      실제보다 느린 속도를 찍어서 "왜 로그랑 다르지"가 된다.
-                predicted = control.to_drive_command(
-                    landing_xy=(landing_x, landing_y),
-                    time_remaining=target.time_remaining_s,
-                    odometry_xy=pool.moved_since_start(odom_xy),
-                )
-                utils.log_cycle(track.fit, (landing_x, landing_y), time_remaining,
-                                odom_xy, predicted, target)
-                utils.log(control.describe(predicted))
 
             # ── ⑥ 사이클 종료 ───────────────────────────────────────────
             if reason:
