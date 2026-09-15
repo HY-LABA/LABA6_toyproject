@@ -1,5 +1,10 @@
 # 시스템 전체 흐름 (pi5 ↔ pico)
 
+> ⚠ **2026-08 기준의 옛 문서다 — 지금 구조와 다르다** (1 ms 루프·속도 명령 등).
+> 현재 흐름은 [`architecture.md` 4장](architecture.md#4-파이프라인-흐름과-구현-상태),
+> 제어 루프는 [`algorithm.md` 5장](algorithm.md#5-제어-루프-pi5mainpy-controlpy), 통신은
+> [`docs/protocol.md`](docs/protocol.md) 를 본다.
+
 물체가 화면에 들어온 순간부터 로봇이 받아내기까지, pi5와 pico가 주고받는 전체
 파이프라인. 각 단계 옆에 지금 상태를 표시한다.
 

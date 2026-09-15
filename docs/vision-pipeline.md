@@ -64,6 +64,10 @@ YOLOv8n의 기본 입력은 640×640이다. 원본 1456×1088을 그대로 리�
 
 ### → 2단계 추론 전략
 
+> ⚠ **설계안이고 아직 구현되지 않았다.** 지금 `vision.detect_all()` 은 매 프레임 전체를 640 레터박스로
+> 한 번 추론한다. ROI 크롭은 [`pi5/TODO.md`](../pi5/TODO.md) 3장의 선택 항목이다. 아래의 "칼만필터"
+> 역할도 지금은 `tracker.py` 의 궤적 재피팅이 한다.
+
 ```
 [탐색 단계]  전체 프레임 → 640 리사이즈 → 추론
              목적: "어디에 있는지"만 찾기. 정밀도는 필요 없다.
@@ -313,10 +317,10 @@ yolov8n.pt  ──export──▶  ONNX  ──Hailo DFC──▶  .hef
 
 잔차가 잡아주는 것은 **검출 노이즈, 오탐, 관측 부족**이다. 그건 여전히 유효하다.
 
-### `measure_sigma_w.py`의 위치
+### bbox 폭 산포
 
 **합격 기준이 아니다.** bbox 폭 산포가 크면 검출 자체가 흔들린다는 신호이므로
-**중심 좌표 품질의 간접 지표**로만 참고한다.
+**중심 좌표 품질의 간접 지표**로만 참고한다. (이를 재던 `measure_sigma_w.py` 는 2026-09-02 삭제됐다.)
 
 ### 클래스
 
@@ -339,34 +343,35 @@ yolov8n.pt  ──export──▶  ONNX  ──Hailo DFC──▶  .hef
 ```python
 @dataclass
 class Detection:
-    class_name: str                            # 단일 클래스 "trash"
-    bbox: tuple[float, float, float, float]   # cx, cy, w, h  (원본 1456×1088 픽셀 기준)
+    u: float                                   # bbox 중심 x (px, 왜곡 보정 후)
+    v: float                                   # bbox 중심 y (px, 왜곡 보정 후)
+    t: float                                   # 캡처 시각 (s)
     confidence: float
+    bbox: tuple[float, float, float, float]    # cx, cy, w, h (원본 1456×1088 픽셀, 보정 전)
 
-def detect_full(frame) -> Detection | None:
-    """전체 프레임 640 리사이즈 추론. 탐색 단계용."""
+def observe(cam) -> tuple[list[Detection], float, np.ndarray]:
+    """한 프레임 캡처 → (후보 전체, 캡처 시각, 원본 프레임). 구동 루프와 test_accuracy.py 가 같이 쓴다."""
 
-def detect_roi(frame, center_px: tuple[float, float]) -> Detection | None:
-    """center_px 중심 640×640 네이티브 크롭 추론. 추적 단계용."""
+def detect_all(frame, t) -> list[Detection]:
+    """신뢰도 임계값을 넘는 검출 **전부**, 신뢰도 내림차순. 640 레터박스 한 번 추론."""
 ```
 
-**두 함수 모두 bbox를 원본 1456×1088 좌표계로 되돌려 반환한다.** ROI 오프셋과 리사이즈
-스케일 역변환은 `vision.py` 안에서 끝내고, 바깥에서는 좌표계를 하나만 본다.
+**후보를 하나로 고르지 않고 전부 넘긴다.** 천장의 에어컨·조명 오탐이 진짜 물체보다 높은 신뢰도를
+받는 경우가 있어서, 어느 것이 진짜인지는 `tracker.TrackerPool` 이 포물선 물리로 가른다.
 
-```
-detect_full:  bbox_원본 = bbox_640 × (1456/640)
-detect_roi :  bbox_원본 = bbox_640 + (roi_x0, roi_y0)      ← 스케일 없음
-```
-
-전처리(letterbox, 정규화)와 후처리(NMS)도 이 안에 둔다.
-`main.py`는 `Detection`만 받는다.
+bbox 는 원본 1456×1088 좌표계로 되돌려 반환한다. 레터박스 역변환과 왜곡 보정(`fisheye.py`)은
+`vision.py` 안에서 끝내고, 바깥에서는 보정된 `u, v` 만 본다. 모델 파일은 `config.YOLO_MODEL_PATH`,
+환경변수 `TRASH_HEF` 로 덮어쓸 수 있다.
 
 ---
 
 ## 9. 작업 순서
 
-> **구현된 도구는 [`../pi5/prep/`](../pi5/prep/)에 있다.** 아래 각 단계에 대응하는 스크립트가 있고,
-> 자동 라벨링은 MOG2 배경차분을 쓴다 — 카메라가 고정이고 배경(천장)이 정적이라 성립한다.
+> **구현된 도구는 [`../pi5/prep/`](../pi5/prep/)에 있다.** 수집 경로가 넷이다 — 정지 카메라 녹화 +
+> MOG2 자동 라벨(`capture_video.py` → `extract_from_video.py`), 주행 녹화 + 수동 라벨
+> (`capture_roam.py` → `label_throws.py`), YOLO+물리 fit 자동 라벨(`collect_throws.py`),
+> 배경 샘플(`collect_live.py`, `extract_background.py`). 각 경로의 편향과 한계는
+> [`../pi5/TODO.md`](../pi5/TODO.md) 5장. MOG2 는 카메라가 고정이고 배경(천장)이 정적일 때만 성립한다.
 
 이 순서대로 하면 앞 단계 결과로 뒷 단계를 검증할 수 있다.
 
@@ -385,5 +390,5 @@ detect_roi :  bbox_원본 = bbox_640 + (roi_x0, roi_y0)      ← 스케일 없�
 9. **추론 지연 측정** — 10 ms 예산 검증
 10. **ROI 추적 통합** — `detect_roi` 연결, 재획득 동작 확인
 
-> 1번은 **데이터 수집을 막지 않는다.** `capture_dataset.py`는 초점거리를 쓰지 않으므로
-> 병렬로 진행하면 된다.
+> 1번은 **데이터 수집을 막지 않는다.** 수집 도구는 초점거리를 쓰지 않으므로 병렬로 진행하면 된다.
+> (10번 ROI 추적은 아직 미구현이다.)
