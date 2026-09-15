@@ -70,15 +70,23 @@ import tracker as tracker_mod
 import utils
 
 
-def run(once: bool = False, hold_s: float | None = None) -> None:
+def run(once: bool = False, hold_s: float | None = None, comm_stats: bool = False) -> None:
     """`once=True` 면 사이클마다 **첫 목표점만** 쓴다 (모듈 docstring 참고).
 
     `hold_s` 가 있으면 그 한 프레임만 전송하고 워치독을 `hold_s` 로 늘린다.
+
+    `comm_stats=True` 면 `communication.LinkStats`로 감싸서 피코-파이 실제
+    송수신 빈도(오도메트리 수신 Hz, 명령 송신 Hz)를 재고, 5초마다 + 종료
+    시 run.log에 요약을 남긴다. ⚠ 왕복시간(RTT)이 아니다 — `LinkStats`
+    docstring 참고.
     """
     _preflight()
 
     cam = vision_open()
     link = communication.SerialLink()
+    if comm_stats:
+        link = communication.LinkStats(link)
+        utils.log("[comm-stats] 통신 빈도 계측 활성화 — 5초마다 요약, 종료 시 전체 요약")
     pool = tracker_mod.TrackerPool()
 
     odom_xy = (0.0, 0.0)
@@ -110,6 +118,8 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
             odom = link.try_receive_odometry()
             if odom is not None:
                 odom_xy = odom.xy
+            if comm_stats:
+                link.maybe_log_periodic()
 
             # ── ②③④ 가설 갱신 → 채택 → 예측 ──────────────────────────
             #    test_accuracy.py가 **이 함수를 그대로 쓴다.**
@@ -261,6 +271,8 @@ def run(once: bool = False, hold_s: float | None = None) -> None:
         utils.log("interrupted")
     finally:
         # 어떤 경로로 빠져나가도 로봇은 세운다.
+        if comm_stats:
+            link.log_final_summary()
         try:
             link.send_command(control.STOP)
         except Exception as exc:  # noqa: BLE001 - 정지 시도는 실패해도 계속 정리한다
@@ -327,6 +339,10 @@ def _parse_args():
     p.add_argument("--hold", type=float, default=None, metavar="초",
                    help="--once 와 함께: 딱 한 번만 전송하고 워치독을 이 시간으로 늘린다. "
                         "사이클 끝 STOP도 생략되므로 로봇을 세우는 건 이 시간뿐이다")
+    p.add_argument("--comm-stats", action="store_true",
+                   help="피코-파이 실제 통신 빈도(오도메트리 수신 Hz, 명령 송신 Hz)를 재서 "
+                        "5초마다 + 종료 시 run.log에 남긴다. 왕복시간(RTT)이 아니라 "
+                        "실제 송수신 빈도다 (communication.LinkStats 참고)")
 
     # ── config 덮어쓰기 ──────────────────────────────────────────────────
     # 없으면 config.py 값을 그대로 쓴다. test_accuracy.py --span/--ratio/--set 와
@@ -415,4 +431,4 @@ def _apply_config_overrides(args) -> None:
 if __name__ == "__main__":
     _args = _parse_args()
     _apply_config_overrides(_args)
-    run(once=_args.once, hold_s=_args.hold)
+    run(once=_args.once, hold_s=_args.hold, comm_stats=_args.comm_stats)

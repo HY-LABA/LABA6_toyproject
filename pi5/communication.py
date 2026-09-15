@@ -37,9 +37,11 @@ pico/communication.c 와 반드시 일치해야 한다.
 from __future__ import annotations
 
 import struct
+import time
 from dataclasses import dataclass
 
 import config
+import utils
 from control import DriveCommand, TargetCommand
 
 _START_BYTE = 0xAA
@@ -114,8 +116,14 @@ class SerialLink:
 
         블로킹하지 않는다. 제어 루프가 카메라 프레임 주기(40fps = 25ms)에 묶여
         있는데 여기서 기다리면 프레임을 놓치고, 놓친 프레임은 그대로 궤적 관측의
-        손실이다. 피코는 1ms마다 보내므로 버퍼에 쌓인 것 중 **가장 최근 것**만
-        쓰고 나머지는 흘린다 — 오래된 오도메트리는 아무 가치가 없다.
+        손실이다. 피코는 CONTROL_PERIOD_MS(pico/config.h, 현재 20ms=50Hz)마다
+        보내므로 버퍼에 쌓인 것 중 **가장 최근 것**만 쓰고 나머지는 흘린다 —
+        오래된 오도메트리는 아무 가치가 없다.
+
+        ⚠ 이 docstring에 예전엔 "피코는 1ms마다 보낸다"고 적혀 있었는데,
+          `pico/main.c`의 실제 제어 루프 주기(`CONTROL_PERIOD_MS`)를 확인해보니
+          20ms(50Hz)였다 — 1ms는 틀린 수치였다. `LinkStats`로 실측하면 이 50Hz에
+          USB/스케줄링 지연이 섞여 실제로는 그보다 낮게 나올 수 있다.
         """
         latest: Odometry | None = None
         frame_size = 3 + struct.calcsize(_RECV_FORMAT)
@@ -140,6 +148,81 @@ class SerialLink:
         if self._port is not None:
             self._port.close()
             self._port = None
+
+
+class LinkStats:
+    """`SerialLink`를 감싸서 실제 송수신 시각을 재는 계측 래퍼. ★ 2026-09-15 추가.
+
+    프로토콜은 하나도 안 건드리고 옆에서 `time.monotonic()` 타임스탬프만 찍는다.
+    `main.py --comm-stats`로 켜면, 카메라+YOLO 부하가 실제로 걸린 상태에서
+    "오도메트리가 진짜 몇 Hz로 들어오는지"와 "명령을 몇 Hz로 내보내는지"를 잰다.
+
+    ⚠ **이건 왕복시간(RTT)이 아니다.** 오도메트리는 명령에 대한 응답(ACK)이
+    아니라 피코가 독자적으로 계속 흘리는 텔레메트리라서 — `communication.py`
+    모듈 docstring에 있듯 요청-응답 구조 자체가 없다 — "보낸 명령에 이 프로토콜로
+    응답이 몇 ms 만에 왔나"는 원리적으로 잴 수 없다. 대신 잴 수 있는(그리고 실제로
+    유용한) 건 둘이다:
+      ① 오도메트리 수신 Hz — 피코의 실제 송신 주기(현재 설계상 50Hz,
+         `pico/main.c`의 CONTROL_PERIOD_MS)에 USB/드라이버/파이썬 스케줄링
+         지연이 섞인, **파이가 실제로 체감하는** 피드백 빈도.
+      ② 명령 송신 Hz — `main.py`의 메인 루프가 실제로 몇 바퀴 도는지. 이건
+         피코 통신 속도가 아니라 **카메라 캡처+YOLO 추론을 포함한 파이 쪽
+         처리율**에 매인다 — 반응이 느리다고 느껴질 때 병목이 통신인지 이쪽인지
+         가르는 데 쓴다.
+    """
+
+    def __init__(self, link: "SerialLink") -> None:
+        self._link = link
+        self._recv_t: list[float] = []
+        self._send_t: list[float] = []
+        self._last_periodic = time.monotonic()
+
+    def send_target(self, cmd: TargetCommand) -> None:
+        self._send_t.append(time.monotonic())
+        self._link.send_target(cmd)
+
+    def send_command(self, cmd: DriveCommand) -> None:
+        self._send_t.append(time.monotonic())
+        self._link.send_command(cmd)
+
+    def try_receive_odometry(self) -> Odometry | None:
+        odom = self._link.try_receive_odometry()
+        if odom is not None:
+            self._recv_t.append(time.monotonic())
+        return odom
+
+    def close(self) -> None:
+        self._link.close()
+
+    @staticmethod
+    def _describe(times: list[float]) -> str:
+        if len(times) < 2:
+            return f"표본 {len(times)}개 (부족)"
+        import statistics
+
+        intervals = [b - a for a, b in zip(times, times[1:])]
+        mean_iv = statistics.mean(intervals)
+        return (f"{len(times)}개, 평균 {1.0 / mean_iv:.1f}Hz "
+                f"(간격 평균 {mean_iv * 1000:.1f}ms, 최대 {max(intervals) * 1000:.1f}ms, "
+                f"표준편차 {statistics.pstdev(intervals) * 1000:.1f}ms)")
+
+    def maybe_log_periodic(self, period_s: float = 5.0) -> None:
+        """`period_s`마다 최근 구간 통계를 run.log에 남긴다. 메인 루프에서 매
+        프레임 불러도 된다 — 내부에서 알아서 주기를 확인한다."""
+        now = time.monotonic()
+        if now - self._last_periodic < period_s:
+            return
+        self._last_periodic = now
+        cutoff = now - period_s
+        recent_recv = [t for t in self._recv_t if t >= cutoff]
+        recent_send = [t for t in self._send_t if t >= cutoff]
+        utils.log(f"[comm-stats 최근 {period_s:.0f}s] 오도메트리 수신: "
+                  f"{self._describe(recent_recv)} | 명령 송신: {self._describe(recent_send)}")
+
+    def log_final_summary(self) -> None:
+        """실행 전체 구간 통계 — 종료 직전(정지 명령 보내기 전)에 부른다."""
+        utils.log(f"[comm-stats 전체] 오도메트리 수신: {self._describe(self._recv_t)}")
+        utils.log(f"[comm-stats 전체] 명령 송신: {self._describe(self._send_t)}")
 
 
 def debug_decode(raw: bytes) -> str:
