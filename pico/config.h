@@ -40,7 +40,7 @@ static const MotorPins MOTOR_PINS[NUM_MOTORS] = {
 // ⚠ 정해야함: 실측. 모터 도착 후 PWM 100%로 직진시켜 엔코더 속도가 평평해지는
 //   값을 넣고, pi5/config.py의 WHEEL_MAX_SPEED_MPS 도 같은 값으로 맞출 것
 //   (control.verify_wheel_config() 가 이 이름을 파싱해 대조한다).
-#define WHEEL_MAX_SPEED_MPS 1.22f
+#define WHEEL_MAX_SPEED_MPS 1.8f
 
 // 바퀴 장착각(rad). **pi5/config.py 의 WHEEL_ANGLES_RAD 와 반드시 같아야 한다**
 // (control.verify_wheel_config() 가 이 파일을 직접 읽어 대조한다).
