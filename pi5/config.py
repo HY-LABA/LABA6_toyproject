@@ -363,7 +363,7 @@ MIN_TARGET_DIST_M = 0.6
 #   보장되는 하한**으로 쓴다 (유리한 방향은 최대 15% 더 나온다).
 #   모터 도착 후 PWM 100%로 직진시키고 엔코더 속도가 평평해지는 값으로 갱신할 것.
 #   pico/config.h 의 WHEEL_MAX_SPEED_MPS 와 반드시 같은 값이어야 한다.
-ROBOT_MAX_SPEED_MPS = 1.22  # 정해야함: 실측
+ROBOT_MAX_SPEED_MPS = 1.8  # 정해야함: 실측
 
 # ── 바퀴 배치 (3륜 옴니) ────────────────────────────────────────────────
 #
@@ -400,7 +400,7 @@ WHEEL_MOUNT_RADIUS_M = 0.15   # 중심 → 바퀴 거리. omega 를 쓸 때만 �
 # ((232/60)회전/초 × π × 0.1m)이 실은 이 값이다 — 모터가 제한하는 건 바퀴 속도이지
 # body 속도가 아니다. body 속도 상한은 진행 방향에 따라 여기서 파생된다
 # (control.max_body_speed 참고).
-WHEEL_MAX_SPEED_MPS = 1.22    # 정해야함: 실측 (ROBOT_MAX_SPEED_MPS 와 같은 실측값)
+WHEEL_MAX_SPEED_MPS = 1.8    # 정해야함: 실측 (ROBOT_MAX_SPEED_MPS 와 같은 실측값)
 
 # 이 시간 안에 새 명령이 안 오면 피코가 알아서 정지한다(워치독).
 # 재보정 주기보다 조금 길게 잡는다 — 짧으면 명령 사이에 끊겨서 덜컹거리고,
