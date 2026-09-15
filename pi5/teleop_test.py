@@ -39,9 +39,35 @@ pico/TODO.md 2번(최대속도·가속시간·정지거리 실측)을 반복 재
 우측)에서 반시계로 재고, 90°가 전방(M1)이다. 기본값 90°(전방)로 두면 보통은
 줄자를 로봇 앞에 놓고 재기 편하다.
 
+★ 고정시간 속도 테스트 모드 (--speed-test) — 2026-09-15 추가
+--------------------------------------------------------------
+"이 속도로 N초 동안 가라"고만 명령하고, 실제로 낸 속도를 재는 모드. `--go-distance`가
+"거리 목표"를 기준으로 서는 것과 달리 이건 **거리와 무관하게 딱 정해진 시간만** 밀어붙인다
+— 도달 여부를 안 따지므로 "명령한 속도를 실제로 낼 수 있는가" 자체를 보는 데 더 직접적이다.
+
+    python teleop_test.py --port /dev/ttyACM0 --speed-test 1.8 --speed-test-duration 1.0
+
+⚠ **읽고 쓸 것 — 이 모드는 1.8 m/s를 그대로 시험하지 못할 수 있다.**
+피코 펌웨어(`pico/main.c`)는 어떤 경로로 온 명령이든 마지막에 `max_body_speed()`로
+방향별 바퀴 상한을 걸어 **소프트웨어적으로 자른다** — 그 상한의 기준값이
+`pico/config.h`의 `WHEEL_MAX_SPEED_MPS`(현재 1.22, 유리한 방향이면 최대 1.41까지)다.
+1.8 m/s를 명령해도 이 값을 넘는 순간 무조건 잘려서 나간다. 즉:
+
+  · 실측 결과가 이 상한 근처(1.22~1.41 m/s대)에서 **평평하게 멈춘다** → 지금은
+    소프트웨어 클램프가 병목이다. 진짜 모터 한계가 1.8인지는 `pico/config.h`의
+    `WHEEL_MAX_SPEED_MPS`를 올리고(`pi5/config.py`도 같은 값으로 맞추고)
+    재플래시한 뒤에야 실측할 수 있다 — 이 스크립트 혼자서는 그 이상을 못 낸다.
+  · 그 상한에도 못 미치고 더 낮은 값에서 멈춘다 → 클램프보다 먼저 다른 무언가
+    (모터 토크·배터리 전압 강하·PID 게인·바퀴 슬립)가 병목이라는 뜻이라, 상한을
+    올려봐야 소용없고 그쪽을 봐야 한다.
+
+이 스크립트는 매 틱 명령한 속도와, 오도메트리 pose 차분으로 잰 실제 순간속도를
+같이 찍고, 마지막에 그 방향의 소프트웨어 상한(`control.max_body_speed`)과 비교해서
+위 두 경우 중 어느 쪽인지 판정까지 같이 보여준다.
+
 의존성: pip install pygame pyserial (또는 apt python3-pygame) — **단, --go-distance
-모드는 조이스틱을 안 쓰므로 pygame이 없어도 동작한다** (아래에서 지연 import로
-분기했다).
+--speed-test 모드는 조이스틱을 안 쓰므로 pygame이 없어도 동작한다** (아래에서 지연
+import로 분기했다).
 
 컨트롤러는 USB-A로 라즈베리파이에 유선 연결한다. 축 부호가 몸체와 안 맞으면
 (예: 스틱을 앞으로 밀었는데 로봇이 옆으로 감) 실행 중 찍히는 cmd=(vx,vy) 부호를
@@ -51,6 +77,10 @@ pico/TODO.md 2번(최대속도·가속시간·정지거리 실측)을 반복 재
 정지: Ctrl+C, 또는 컨트롤러 B 버튼(SDL 매핑에 따라 다를 수 있음 — 안 먹으면
 Ctrl+C 쓸 것). 어느 경로로 종료해도 STOP을 두 번 보내고 닫는다. 스크립트가
 죽어도 피코 워치독(config.DRIVE_TIMEOUT_S)이 알아서 정지시킨다.
+
+⚠ 안전 — 1.8m/s는 이 로봇 기준으로 빠르다. 장애물 감지가 없으므로, 반드시 앞뒤로
+  최소 2~3m 이상 뚫린 공간을 확보하고, 사람이 바로 옆에서 지켜보며 Ctrl+C를 쥐고
+  있는 상태에서만 --speed-test를 쓸 것.
 """
 
 from __future__ import annotations
@@ -115,19 +145,32 @@ def main() -> int:
     g.add_argument("--test-speed", type=float, default=0.3, metavar="M/S",
                     help="--go-distance 에서 낼 순항 속도 (기본 0.3 — 처음엔 낮게)")
     g.add_argument("--heading", type=float, default=90.0, metavar="DEG",
-                    help="--go-distance 진행 방향(도). control.DriveCommand.heading_deg와 "
-                         "같은 규약: body +X(우측)에서 반시계, 90°=전방(M1). 기본 90°")
+                    help="--go-distance/--speed-test 진행 방향(도). "
+                         "control.DriveCommand.heading_deg와 같은 규약: body +X(우측)에서 "
+                         "반시계, 90°=전방(M1). 기본 90°")
     g.add_argument("--settle-s", type=float, default=0.6, metavar="초",
-                    help="--go-distance 정지 명령 뒤에도 이만큼 더 오도메트리를 받아 "
-                         "정지거리(관성 미끄러짐)를 측정한다 (기본 0.6s)")
+                    help="--go-distance/--speed-test 정지 명령 뒤에도 이만큼 더 오도메트리를 "
+                         "받아 정지거리(관성 미끄러짐)를 측정한다 (기본 0.6s)")
     g.add_argument("--timeout-s", type=float, default=10.0, metavar="초",
                     help="--go-distance 가 이 시간 안에 목표 거리에 못 미치면 강제 종료 "
                          "(도달 불가 상황에서 무한 루프 방지, 기본 10s)")
+
+    g2 = ap.add_argument_group("고정시간 속도 테스트 모드 (--speed-test 를 주면 이걸 쓴다)")
+    g2.add_argument("--speed-test", type=float, default=None, metavar="M/S",
+                     help="이 속도(m/s)로 --speed-test-duration 초 동안 직진 명령만 계속 "
+                          "보낸다 (거리 목표 없음). 주면 조이스틱/--go-distance 대신 이 "
+                          "모드로 진입한다. ⚠ 피코가 WHEEL_MAX_SPEED_MPS로 방향별 상한을 "
+                          "걸어 넘는 값은 자동으로 잘린다 — 모듈 docstring 참고")
+    g2.add_argument("--speed-test-duration", type=float, default=1.0, metavar="초",
+                     help="--speed-test 지속 시간 (기본 1.0초)")
 
     args = ap.parse_args()
 
     if args.port is None:
         sys.exit("--port를 지정할 것 (예: --port /dev/ttyACM0). config.SERIAL_PORT도 아직 비어 있다.")
+
+    if args.speed_test is not None:
+        return _run_speed_test(args)
 
     if args.go_distance is not None:
         return _run_distance_test(args)
@@ -349,6 +392,170 @@ def _run_distance_test(args) -> int:
     print("  실측이 이보다 짧다 -> 피코가 실제보다 더 갔다고 과대보고 -> 그 비율만큼")
     print("                        캐치 목표점에 못 미친다 (지금 겪는 증상과 같은 방향).")
     print("  실측이 이보다 길다 -> 피코가 과소보고 -> 캐치가 오버슈트하는 방향.")
+    return 0
+
+
+def _run_speed_test(args) -> int:
+    """조이스틱 없이 --speed-test 속도로 --speed-test-duration 초만 직진시킨다.
+
+    `--go-distance`와 달리 **거리 목표가 없다** — "도달했으니 정지"가 아니라 "정해진
+    시간 동안 이 속도를 계속 요구하면 실제로 뭐가 나오는가"만 본다. 모터/배터리/
+    펌웨어 클램프 중 어디가 병목인지 가르는 게 목적이라, 오히려 거리 판정이 섞이면
+    안 된다(도달 여부가 속도 자체와는 다른 얘기이기 때문).
+
+    ⚠ 피코 펌웨어의 `max_body_speed()` 클램프(WHEEL_MAX_SPEED_MPS 기준)를 이 함수가
+    우회할 방법은 없다 — 모듈 docstring의 "고정시간 속도 테스트 모드" 항목 참고.
+    """
+    import math
+    import time as _time
+
+    import communication
+    import config
+    import control
+
+    heading_rad = math.radians(args.heading)
+    vx_dir, vy_dir = math.cos(heading_rad), math.sin(heading_rad)
+    cap = control.max_body_speed(vx_dir, vy_dir)
+
+    period = 1.0 / 50.0
+    if period >= config.DRIVE_TIMEOUT_S:
+        print(f"⚠ 명령 주기 {period*1000:.0f}ms가 워치독 {config.DRIVE_TIMEOUT_S*1000:.0f}ms"
+              f"보다 느리다 — 명령 사이에 로봇이 자꾸 멈출 수 있다.")
+
+    if args.speed_test > cap:
+        print(f"⚠ 요청 속도 {args.speed_test:.2f}m/s가 이 방향({args.heading:.0f}°)의 현재 "
+              f"소프트웨어 상한 {cap:.2f}m/s(config.WHEEL_MAX_SPEED_MPS 기준)보다 크다 — "
+              f"피코가 자동으로 {cap:.2f}m/s까지 잘라서 내보낼 것이다. 그 이상을 실측하려면 "
+              f"pico/config.h의 WHEEL_MAX_SPEED_MPS를 올리고 재플래시해야 한다.")
+
+    link = communication.SerialLink(port=args.port)
+
+    def _await_odometry(timeout_s: float = 2.0):
+        deadline = _time.monotonic() + timeout_s
+        while _time.monotonic() < deadline:
+            link.send_command(control.STOP)
+            odom = link.try_receive_odometry()
+            if odom is not None:
+                return odom
+            _time.sleep(0.02)
+        return None
+
+    print("시작 전 오도메트리 확인 중...")
+    start_odom = _await_odometry()
+    if start_odom is None:
+        link.close()
+        sys.exit("피코에서 오도메트리를 못 받았다 — 배선/포트/워치독을 확인할 것.")
+
+    x0, y0 = start_odom.x, start_odom.y
+    print(f"시작 pose = ({x0:+.4f}, {y0:+.4f})  "
+          f"명령: {args.speed_test:.2f}m/s, {args.heading:.0f}° 방향, "
+          f"{args.speed_test_duration:.2f}초간  (이 방향 소프트웨어 상한 {cap:.2f}m/s)")
+    print("Ctrl+C로 언제든 중단 가능 (STOP 두 번 보내고 종료).\n")
+
+    # (t, x, y) 샘플 — go_distance와 같은 이유로 pose 차분으로 속도를 직접 낸다
+    # (odom.vx/vy는 칼만 스무딩 시정수 ~1.4s라 <1s 구간에는 못 믿는다).
+    samples: list[tuple[float, float, float]] = []
+    t_start = _time.monotonic()
+    cmd = control.DriveCommand(target_vx=vx_dir * args.speed_test,
+                                target_vy=vy_dir * args.speed_test,
+                                timeout_s=config.DRIVE_TIMEOUT_S)
+
+    next_tick = _time.monotonic()
+    try:
+        while True:
+            now = _time.monotonic()
+            elapsed = now - t_start
+            if elapsed >= args.speed_test_duration:
+                break
+
+            link.send_command(cmd)
+            odom = link.try_receive_odometry()
+            if odom is not None:
+                samples.append((elapsed, odom.x, odom.y))
+                print(f"  t={elapsed:5.2f}s  pose=({odom.x:+.3f},{odom.y:+.3f})  "
+                      f"odom.vel(스무딩됨)=({odom.vx:+.2f},{odom.vy:+.2f})" + " " * 6,
+                      end="\r")
+
+            next_tick += period
+            sleep_for = next_tick - _time.monotonic()
+            if sleep_for > 0:
+                _time.sleep(sleep_for)
+            else:
+                next_tick = _time.monotonic()
+    except KeyboardInterrupt:
+        print("\n인터럽트 — 정지")
+
+    cmd_end_t = _time.monotonic() - t_start
+    link.send_command(control.STOP)
+    _time.sleep(0.05)
+    link.send_command(control.STOP)
+
+    settle_deadline = _time.monotonic() + args.settle_s
+    while _time.monotonic() < settle_deadline:
+        odom = link.try_receive_odometry()
+        if odom is not None:
+            samples.append((_time.monotonic() - t_start, odom.x, odom.y))
+        _time.sleep(0.02)
+    link.close()
+
+    print("\n" + "=" * 60)
+    if len(samples) < 2:
+        print("오도메트리 샘플이 너무 적다 — 측정 실패.")
+        return 1
+
+    # 연속 샘플 간 pose 차분으로 순간속도를 낸다. 명령 구간(t <= cmd_end_t)에서
+    # 최고값·마지막 구간(순항 안정 여부 확인용) 평균을 본다.
+    speeds: list[tuple[float, float]] = []   # (t, |v|)
+    for i in range(1, len(samples)):
+        t_a, xa, ya = samples[i - 1]
+        t_b, xb, yb = samples[i]
+        dt = t_b - t_a
+        if dt <= 1e-4:
+            continue
+        v = math.hypot(xb - xa, yb - ya) / dt
+        speeds.append((t_b, v))
+
+    during = [v for t, v in speeds if t <= cmd_end_t]
+    if not during:
+        print("명령 구간 안의 속도 샘플이 없다 — 측정 실패.")
+        return 1
+
+    peak = max(during)
+    peak_t = next(t for t, v in speeds if v == peak)
+    # '순항 안정' 추정: 명령 구간 마지막 30%의 평균 — 계속 가속 중이면 이 값이
+    # peak보다 뚜렷이 낮게 나온다(=가속이 안 끝났다는 뜻), 비슷하면 이미 정상상태.
+    tail_start = cmd_end_t * 0.7
+    tail = [v for t, v in speeds if t >= tail_start and t <= cmd_end_t]
+    steady = sum(tail) / len(tail) if tail else peak
+
+    print(f"명령 속도                         = {args.speed_test:.3f} m/s"
+          f"  ({args.heading:.0f}° 방향, 소프트웨어 상한 {cap:.3f} m/s)")
+    print(f"실측 최고 순간속도 (pose 차분)     = {peak:.3f} m/s  (t={peak_t:.2f}s)")
+    print(f"명령 구간 마지막 30% 평균속도      = {steady:.3f} m/s"
+          f"  (peak 대비 {100*steady/peak:.0f}%" +
+          (", 정상상태로 보임)" if steady >= peak * 0.9 else ", 아직 가속 중이었을 가능성)"))
+
+    print("-" * 60)
+    if peak >= cap * 0.9:
+        print(f"→ 실측 최고속도가 이 방향 소프트웨어 상한({cap:.2f}m/s)의 90% 이상이다.")
+        if args.speed_test > cap * 1.05:
+            print(f"  요청({args.speed_test:.2f}m/s)이 상한보다 컸는데도 상한 근처에서 "
+                  f"막혔다 — 지금은 **소프트웨어 클램프(WHEEL_MAX_SPEED_MPS)가 병목**이다. "
+                  f"1.8m/s 자체가 모터로 가능한지는 아직 이 실측으로는 알 수 없다 — "
+                  f"pico/config.h의 WHEEL_MAX_SPEED_MPS를 올리고 재플래시한 뒤 다시 재볼 것.")
+        else:
+            print(f"  요청한 속도만큼(또는 그 근처까지) 잘 나왔다 — 이 속도 대역에서는 "
+                  f"모터/배터리가 병목이 아니다.")
+    else:
+        print(f"→ 소프트웨어 상한({cap:.2f}m/s)까지도 못 미치고 {peak:.2f}m/s에서 멈췄다. "
+              f"클램프가 아니라 **모터 토크·배터리 전압강하·PID 게인·바퀴 슬립 쪽이 "
+              f"먼저 병목**일 가능성이 크다 — 상한을 올려도 이 속도 자체는 안 오를 수 있다.")
+
+    print("=" * 60)
+    print("⚠ 참고: 위 '실측 최고 순간속도'는 20ms 오도메트리 샘플 간 pose 차분이라 "
+          "노이즈가 있다 — 여러 번 반복해서 값이 일관되는지 볼 것. odom.vel(스무딩됨)은 "
+          "칼만 시정수(~1.4s) 때문에 이렇게 짧은 구간에서는 실제보다 낮게 보일 수 있어 "
+          "참고용으로만 같이 찍었다.")
     return 0
 
 
