@@ -69,6 +69,15 @@ import control
 
 _S = math.sqrt(0.5)     # 대각선 성분 — 크기가 1 이 되도록
 
+# ⚠ 2026-09-16 — 이 파일은 config.CAMERA_YAW_RAD 를 전혀 안 쓴다(카메라 자체가
+#   없는 테스트라서). 그런데 오늘 이 테스트로 "front/right/left 전부 정확히 반대로
+#   간다"(균일 반전)를 확인했다 — 09-09 에는 이 테스트에서 정상이었던 것이 UF2
+#   재빌드·배선 등으로 그사이 다시 뒤집힌 것으로 보인다(원인 미상). UF2 를 이번엔
+#   건드리지 않기로 해서, 이 스크립트만의 구동 보정을 여기 하나로 모아 둔다.
+#   구동을 다시 실측했는데 결과가 바뀌면(=UF2 를 고쳤다면) 제일 먼저 이 값을
+#   +1 로 되돌릴 것 — 안 그러면 이 테스트 도구 자체가 반대로 보고한다.
+DRIVE_SIGN = -1  # 2026-09-16: 균일 반전 확인, 상쇄. UF2 고치면 +1 로.
+
 # body frame: +X = 로봇 우측, +Y = 로봇 전방(M1). theta 를 안 쓰므로 world 축과 같다.
 DIRECTIONS: dict[str, tuple[float, float, str]] = {
     "front": (0.0, +1.0, "전방 (+Y, M1 쪽)"),
@@ -146,7 +155,7 @@ def goto(link, target_xy, speed: float, hz: float, timeout_s: float, last_pose,
 def run_leg(link, name: str, dist_m: float, speed: float, hz: float,
             go_back: bool, last_pose, t_floor: float = 0.05):
     ux, uy, label = DIRECTIONS[name]
-    dx, dy = ux * dist_m, uy * dist_m
+    dx, dy = ux * dist_m * DRIVE_SIGN, uy * dist_m * DRIVE_SIGN
 
     print(f"\n── {name}  {label}  {dist_m:.2f} m ──")
     for n in (3, 2, 1):
