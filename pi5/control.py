@@ -164,9 +164,14 @@ def to_target_command(landing_xy: tuple[float, float], origin_odom: tuple[float,
 
     ⚠ 여기서 "이미 간 거리"를 빼지 않는다. 그걸 하는 건 피코다.
     """
+    # 구동 반전 상쇄 (2026-09-16) — config.DRIVE_INVERT 주석 참고.
+    # 피코 내부에서는 "목표까지 갔다"고 자기완결적으로 계산되고(부호가 엔코더·PWM
+    # 양쪽에 곱해져 상쇄되므로 오도메트리도 안 바뀐다), **물리적으로만** 반대로 간다.
+    # 그래서 여기서 변위를 뒤집어 보내면 실제 이동이 제자리를 찾는다.
+    sign = -1.0 if config.DRIVE_INVERT else 1.0
     return TargetCommand(
-        target_x=landing_xy[0] + origin_odom[0],
-        target_y=landing_xy[1] + origin_odom[1],
+        target_x=landing_xy[0] * sign + origin_odom[0],
+        target_y=landing_xy[1] * sign + origin_odom[1],
         # ★ 남은시간을 DRIVE_AGGRESSION 으로 나눠서 보낸다 (2026-09-07).
         #   피코는 `속도 = 남은거리 ÷ 남은시간` 이므로, 남은시간을 줄여 보내면 그만큼
         #   빨리 간다. 8.0 이면 사실상 "항상 최대속도" 이고, 어차피 피코가 방향별

@@ -223,6 +223,10 @@ def run(once: bool = False, hold_s: float | None = None, comm_stats: bool = Fals
                 bearing = pool.early_bearing()
                 if bearing is not None:
                     d = config.EARLY_START_DIST_M
+                    # 구동 반전 상쇄 — to_target_command() 와 같은 처리
+                    # (config.DRIVE_INVERT 주석 참고). 이 경로는 목표점을 직접
+                    # 만들기 때문에 여기에도 따로 걸어줘야 한다.
+                    d *= -1.0 if config.DRIVE_INVERT else 1.0
                     link.send_target(control.TargetCommand(
                         target_x=odom_xy[0] + bearing[0] * d,
                         target_y=odom_xy[1] + bearing[1] * d,

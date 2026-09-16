@@ -29,10 +29,15 @@
 
 ★ 좌표 규약 — 부호를 여기서 검증한다
 ------------------------------------
-코드가 내는 착지점 (x, y)는 카메라 좌표계다. 장착 규약(`docs/hardware.md`)에 따르면
-**x = 로봇 전방, y = 로봇 우측**(= 이미지 +v 방향)이어야 한다. 이 규약이 실제 조립과
-어긋나면 로봇이 반대쪽으로 간다. 그래서 정답을 **물리적인 말("전방 몇 cm, 좌측 몇 cm")**
-로 입력받아, 부호가 계통적으로 뒤집혀 있으면 경고한다.
+코드가 내는 착지점 (x, y)는 `tracker.landing()` 이 `cam_to_robot()`(= `CAMERA_YAW_RAD`
+회전)까지 적용해서 돌려준 **로봇 body 축** 값이다. 규약은
+**x = 로봇 우측, y = 로봇 전방(M1 쪽)** 이다 (`config.py` body frame 정의,
+`docs/hardware.md`). 이 규약이 실제 조립과 어긋나면 로봇이 반대쪽으로 간다.
+그래서 정답을 **물리적인 말("전방 몇 cm, 좌측 몇 cm")** 로 입력받아, 좌우 부호가
+계통적으로 뒤집혀 있으면 경고한다.
+
+⚠ 2026-09-16 정정 — 예전 판은 `x = 전방, y = 우측` 으로 비교하고 있었다(축이 뒤바뀜).
+  그 상태로는 정답을 정확히 넣어도 오차가 엉뚱하게 크게 나온다.
 """
 
 from __future__ import annotations
@@ -177,10 +182,12 @@ class Throw:
         if self.gt is None:
             return None, None
         fwd, left = self.gt["forward_m"], self.gt["left_m"]
-        # 문서 규약: code x = 전방, code y = 우측 = −좌측
-        a = [math.hypot(p["x"] - fwd, p["y"] - (-left)) * 100 for p in self.preds]
-        # 뒤집힘 가설: code y = 좌측
-        b = [math.hypot(p["x"] - fwd, p["y"] - left) * 100 for p in self.preds]
+        # body frame 규약: code x = 로봇 우측(= −좌측),  code y = 로봇 전방(M1 쪽)
+        # ⚠ 2026-09-16 정정 — 예전엔 x=전방, y=우측으로 비교하고 있었다(축이 뒤바뀜).
+        #   실제 규약은 config.py 의 body frame 정의와 docs/hardware.md 쪽이 맞다.
+        a = [math.hypot(p["x"] - (-left), p["y"] - fwd) * 100 for p in self.preds]
+        # 좌우 뒤집힘 가설: code x = 좌측
+        b = [math.hypot(p["x"] - left, p["y"] - fwd) * 100 for p in self.preds]
         return a, b
 
     def to_json(self) -> dict:
@@ -235,7 +242,7 @@ def print_throw(throw: Throw) -> None:
         return
 
     errs, _ = throw.errors()
-    head = f"   {'t(s)':>6}{'관측':>5}{'스팬':>7}{'깊이(m)':>9}{'잔차(px)':>9}{'예측 착지 (cm)':>20}"
+    head = f"   {'t(s)':>6}{'관측':>5}{'스팬':>7}{'깊이(m)':>9}{'잔차(px)':>9}{'예측 착지 우/전(cm)':>20}"
     print(head + (f"{'오차':>9}" if errs else ""))
     print("   " + "─" * (len(head) + (9 if errs else 0) - 3))
     for i, p in enumerate(throw.preds):
@@ -252,7 +259,7 @@ def print_throw(throw: Throw) -> None:
     f = throw.preds[0]
     l = throw.preds[-1]
     print(f"   첫 예측 {f['t_rel']:.2f}s" + (f", 오차 {errs[0]:.1f}cm" if errs else ""))
-    print(f"   최종 예측 ({l['x']*100:+.1f}, {l['y']*100:+.1f}) cm"
+    print(f"   최종 예측 우{l['x']*100:+.1f} 전{l['y']*100:+.1f} cm"
           + (f", 오차 {errs[-1]:.1f}cm" if errs else ""))
 
 
@@ -339,11 +346,12 @@ def print_summary(throws: list[Throw]) -> None:
     # ★ 좌표 부호 검증
     if flip_wins >= max(2, int(len(measured) * 0.7)):
         print(f"\n  ⚠ **좌우 부호가 뒤집혀 있을 수 있다** — {len(measured)}회 중 {flip_wins}회에서")
-        print("     'code y = 좌측' 가설이 문서 규약('code y = 우측')보다 오차가 작았다.")
-        print("     카메라 장착 방향(docs/hardware.md)이나 control의 y 부호를 확인할 것.")
+        print("     'code x = 좌측' 가설이 규약('code x = 로봇 우측')보다 오차가 작았다.")
+        print(f"     config.CAMERA_YAW_RAD (지금 {math.degrees(config.CAMERA_YAW_RAD):.0f}°) 나 "
+              "카메라 장착 방향을 확인할 것.")
         print("     그대로 두면 로봇이 좌우 반대로 간다.")
     elif len(measured) >= 3:
-        print(f"\n  좌표 부호: 문서 규약(code y = 로봇 우측)과 일치 "
+        print(f"\n  좌표 부호: 규약(code x = 로봇 우측, y = 전방)과 일치 "
               f"({len(measured)}회 중 {len(measured) - flip_wins}회)")
 
 
