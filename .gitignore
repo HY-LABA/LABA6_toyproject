@@ -41,8 +41,9 @@ runs/
 *.png
 *.onnx
 
-# 단, 문서용 이미지(배선도·도표)는 저장소에 포함한다 — 위 *.png 규칙의 예외.
+# 단, 문서용 이미지(배선도·데모)는 저장소에 포함한다 — 위 *.png 규칙의 예외.
 !docs/images/*.png
+!docs/images/*.gif
 
 # test_accuracy.py 가 저장하는 투척 로그 (개인 실험 데이터)
 pi5/logs/

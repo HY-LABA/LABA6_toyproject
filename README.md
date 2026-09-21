@@ -3,6 +3,10 @@
 **A three-wheeled omnidirectional robot that catches thrown objects by
 predicting where they will land — using a single upward-facing camera.**
 
+<p align="center">
+  <img src="docs/images/demo.gif" alt="The robot driving to a predicted landing point" width="360">
+</p>
+
 한국어 문서는 [`README.ko.md`](README.ko.md)를 보세요.
 
 ---
