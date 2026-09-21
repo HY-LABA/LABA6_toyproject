@@ -45,8 +45,8 @@
 
 | 문서 | 내용 |
 |---|---|
-| [`architecture.md`](architecture.md) | 파일 구조, 파일별 책임, 파이프라인 흐름, **구현 상태** |
-| [`algorithm.md`](algorithm.md) | 궤적 추정 수식, 제어 루프, 검증된 성능 |
+| [`docs/architecture.md`](docs/architecture.md) | 파일 구조, 파일별 책임, 파이프라인 흐름, **구현 상태** |
+| [`docs/algorithm.md`](docs/algorithm.md) | 궤적 추정 수식, 제어 루프, 검증된 성능 |
 | [`CHANGELOG.md`](CHANGELOG.md) | 설계 변경 이력 — "왜 이렇게 됐지?" 싶을 때 |
 
 ### 오픈소스 공개용 (영문)
@@ -145,4 +145,4 @@
 (최대속도·정지거리), **투척 영역 규약**이다. 궤적 추정의 합성 검증(착지 오차 중앙값 0.1~0.4 cm)은
 확정 렌즈와 다른 조건에서 돌아가 재확인이 필요하다.
 
-막혀 있는 지점과 우선순위는 [`architecture.md` 5장](architecture.md#5-지금-막혀-있는-지점).
+막혀 있는 지점과 우선순위는 [`docs/architecture.md` 5장](docs/architecture.md#5-지금-막혀-있는-지점).

@@ -2,8 +2,8 @@
 
 물체가 화면에 들어온 순간부터 로봇이 받아내기까지, 파이5가 무엇을 어떻게 계산하는지.
 
-관련 문서: [아키텍처](architecture.md) · [물리 계산](docs/physics.md) ·
-[비전 파이프라인](docs/vision-pipeline.md) · [통신 프로토콜](docs/protocol.md)
+관련 문서: [아키텍처](architecture.md) · [물리 계산](physics.md) ·
+[비전 파이프라인](vision-pipeline.md) · [통신 프로토콜](protocol.md)
 
 ---
 
@@ -44,7 +44,7 @@
 
 로봇 좌표계는 바퀴 배치로 정의한다: **+Y = M1 방향(로봇 전방), +X = M1과 M2 사이로
 나가는 방향(로봇 우측)**, 오른손 좌표계라 ω는 반시계가 +. 장착각은 M1 90° / M2 330° /
-M3 210°다 ([`pi5/config.py`](pi5/config.py) `WHEEL_ANGLES_RAD`).
+M3 210°다 ([`pi5/config.py`](../pi5/config.py) `WHEEL_ANGLES_RAD`).
 
 ### 카메라 축 → body 축 회전 (`CAMERA_YAW_RAD`)
 
@@ -66,7 +66,7 @@ M3 210°다 ([`pi5/config.py`](pi5/config.py) `WHEEL_ANGLES_RAD`).
 
 > ⚠ 현재 값 0.0 은 **사진 측정값(180°)이 아니라 실기에서 맞게 가는 값**이다. 사진은 카메라가
 > 어디를 보는지만 재고 모터가 어느 쪽으로 도는지는 못 본다. 즉 모터 쪽에도 반전이 하나 더
-> 있어서 서로 상쇄 중일 가능성이 크다 → [open-questions.md](docs/open-questions.md)
+> 있어서 서로 상쇄 중일 가능성이 크다 → [open-questions.md](open-questions.md)
 
 ### 카메라 오프셋 (`CAMERA_OFFSET_M`)
 
@@ -130,7 +130,7 @@ Y-식:  [   0,      0,  −fy, −fy·t,   b,  b·t ]   rhs = ½t²(fy·gy − b
 
 그래서 `vision._undistort`가 검출된 **점 하나만** 핀홀 등가 좌표로 옮긴 뒤 피팅에
 넣는다. 60 fps로 프레임 전체를 undistort하는 건 낭비다 — 프레임당 의미 있는 픽셀이
-한 점뿐이다. 근거는 [`docs/physics.md` 7.2장](docs/physics.md#72--이-렌즈는-핀홀이-아니다--등거리-어안이다).
+한 점뿐이다. 근거는 [`docs/physics.md` 7.2장](physics.md#72--이-렌즈는-핀홀이-아니다--등거리-어안이다).
 
 ---
 
@@ -255,7 +255,7 @@ Y_land = Y0 + Vy · t_land
 (1.0 → 37 cm 앞, 2.0 → 18 cm, 4.0 → 9 cm).
 
 상한은 **방향별 바퀴 속도 기준**이고, 넘으면 **크기만 깎고 방향은 보존**한다
-([pico-control.md 3장](docs/pico-control.md#3-기구학)). 도착 허용오차(`POSITION_TOLERANCE_M`,
+([pico-control.md 3장](pico-control.md#3-기구학)). 도착 허용오차(`POSITION_TOLERANCE_M`,
 2 cm) 안이면 정지한다.
 
 ### 5-2. 조기 출발 — 방향은 3프레임이면 안다
@@ -311,7 +311,7 @@ Y_land = Y0 + Vy · t_land
 ### 5-6. 이 설계가 치르는 대가 (알고 쓸 것)
 
 - **오버슈트가 늘었다.** 전속으로 붙고 거리에 하한을 깔았으니 당연하다. 정지거리는 아직 안
-  쟀다 ([pico/TODO.md](pico/TODO.md))
+  쟀다 ([pico/TODO.md](../pico/TODO.md))
 - **조기 출발은 움직이는 오탐도 탄다.** 350 px/s를 넘는 것(사람 손, 흔들리는 물체)이면
   로봇이 그쪽으로 튄다
 - **로봇이 움직이면 정지한 천장점도 궤적으로 채택될 수 있다.** 시차로 화면에서 곡선을 그려서다.
@@ -348,7 +348,7 @@ Y_land = Y0 + Vy · t_land
 > 실측 렌즈는 번들 M12 어안으로 **f_px 973** (2026-08-19 캘리브레이션)이라, 같은 1 px
 > 노이즈가 약 1.8배 큰 각도 오차에 해당한다. 화각이 넓어져 화면 체류 시간이 늘어나는
 > 이득도 함께 있으므로 단순 악화는 아니지만, **실측 스펙으로 다시 돌려봐야 한다.**
-> → [`docs/open-questions.md`](docs/open-questions.md)
+> → [`docs/open-questions.md`](open-questions.md)
 
 ---
 
@@ -367,13 +367,13 @@ Y_land = Y0 + Vy · t_land
 여러 개가 잡히면 가장 신뢰도 높은 것 하나만 쓴다. 한 번에 하나만 던진다는 전제이고,
 오탐이 섞여도 3-3의 탄도 게이트에서 걸러진다.
 
-학습 데이터 수집·라벨링·Hailo 변환은 [`docs/vision-pipeline.md`](docs/vision-pipeline.md).
+학습 데이터 수집·라벨링·Hailo 변환은 [`docs/vision-pipeline.md`](vision-pipeline.md).
 
 ---
 
 ## 8. 파라미터
 
-전부 [`pi5/config.py`](pi5/config.py)에 있고, **각 값에 근거가 주석으로 붙어 있다.**
+전부 [`pi5/config.py`](../pi5/config.py)에 있고, **각 값에 근거가 주석으로 붙어 있다.**
 실행 중 바꾸려면 `python main.py --set 이름=값` (여러 번 가능).
 
 | 이름 | 값 | 역할 |

@@ -4,7 +4,7 @@
 
 도구는 [`../pi5/prep/`](../pi5/prep/)에 구현되어 있다.
 
-관련 문서: [알고리즘](../algorithm.md) · [물리 계산](physics.md) · [하드웨어](hardware.md)
+관련 문서: [알고리즘](algorithm.md) · [물리 계산](physics.md) · [하드웨어](hardware.md)
 
 > **이 파이프라인이 만들어내야 하는 것은 정확한 bbox 중심 하나다.**
 > 클래스는 `trash` 1개이고, bbox 크기는 궤적 추정에 쓰지 않는다.
@@ -336,7 +336,7 @@ yolov8n.pt  ──export──▶  ONNX  ──Hailo DFC──▶  .hef
 ## 8. 소프트웨어 인터페이스
 
 [`../pi5/vision.py`](../pi5/vision.py)가 제공하는 계약이다.
-아래 두 함수만 [메인 루프](../algorithm.md#5-제어-루프-pi5mainpy-controlpy)가 쓴다.
+아래 두 함수만 [메인 루프](algorithm.md#5-제어-루프-pi5mainpy-controlpy)가 쓴다.
 
 > **`bbox`에서 실제로 소비되는 건 `cx, cy`뿐이다.** `w, h`는 로그·디버깅용으로만 넘긴다.
 

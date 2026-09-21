@@ -281,6 +281,6 @@ were written but not run before the project ended.
 
 Figures in §1–§5 are from the project's final report (LABA 6th cohort,
 Hanyang University, 2026). Design rationale for the constants involved is in
-[`algorithm.md`](../algorithm.md) and [`physics.md`](physics.md); the full
+[`algorithm.md`](algorithm.md) and [`physics.md`](physics.md); the full
 list of known-unresolved issues is in
 [`open-questions.md`](open-questions.md) (Korean).

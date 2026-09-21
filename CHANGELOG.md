@@ -42,7 +42,7 @@ C 판(`pico/`)과 같은 프로토콜·같은 제어식. Thonny 로 올리므로
 
 몸체 완성 후 첫 실기 주행에서 드러난 것들. 공통 원인은 **깊이가 초반에 과소추정된다**는
 것(관측 4개면 참값의 15%, 13개라도 20~25% — errors-in-variables)과, **물체는 착지 직전에 반드시
-화면을 벗어난다**는 것이다. 설계 전체는 [`algorithm.md` 5장](algorithm.md#5-제어-루프-pi5mainpy-controlpy).
+화면을 벗어난다**는 것이다. 설계 전체는 [`docs/algorithm.md` 5장](docs/algorithm.md#5-제어-루프-pi5mainpy-controlpy).
 
 ### 물체를 놓쳐도 목표까지 간다 — coast (`112421a`, `9d263ad`)
 
@@ -958,11 +958,11 @@ CAMERA_DISTORTION = (-0.134242, 0.028202, -0.044533, 0.028898)
 - `docs/physics.md` 7.2 — 재작성. f 의존 파생값 재계산:
   캔 bbox 26→32 px, σ_z 15.3→12.5 cm, 노출 상한 0.84→0.69 ms, σ_x 2.7→2.2 cm
 - `docs/hardware.md`, `docs/open-questions.md`, `docs/vision-pipeline.md`,
-  `algorithm.md`, `README.md`, `pi5/TODO.md` — 수치 갱신
+  `docs/algorithm.md`, `README.md`, `pi5/TODO.md` — 수치 갱신
 
 ### 남은 것
 
-- **🔴 `algorithm.md` 4장·`hardware.md` 시뮬레이션 재실행.** 수평 화각이 전제(110.5°)보다
+- **🔴 `docs/algorithm.md` 4장·`hardware.md` 시뮬레이션 재실행.** 수평 화각이 전제(110.5°)보다
   16.5° 좁아 물체가 프레임을 더 빨리 벗어난다. 관측 구간이 짧아지면 궤적 최소제곱
   정확도에 직접 영향이 있다
 - `prep/measure_focal_length.py`는 핀홀 전제(`f_px = 1456 × 거리 ÷ S`)라 이 렌즈에
@@ -990,8 +990,8 @@ CAMERA_DISTORTION = (-0.134242, 0.028202, -0.044533, 0.028898)
 | 대상 | 처리 |
 |---|---|
 | `CHANGELOG.md` | **신규** — 흩어져 있던 변경 이력을 전부 여기로 모았다 |
-| `docs/pi5-algorithm.md` | **삭제** → `algorithm.md`에 통합. 폐기된 bbox 폭 방식 서술이 남아 있어 현재 구현과 충돌했다 |
-| `system_flow.md` | **삭제** → `architecture.md`에 통합. 파일 구조와 파이프라인 흐름이 갈라져 있을 이유가 없다 |
+| `docs/pi5-algorithm.md` | **삭제** → `docs/algorithm.md`에 통합. 폐기된 bbox 폭 방식 서술이 남아 있어 현재 구현과 충돌했다 |
+| `docs/archive/system_flow.md` | **삭제** → `docs/architecture.md`에 통합. 파일 구조와 파이프라인 흐름이 갈라져 있을 이유가 없다 |
 | `docs/coordinate_system.md` | **삭제** — 0바이트 빈 파일이었다 |
 | 나머지 문서 전부 | 변경 이력 서술을 걷어내고 **현재 상태만** 남겼다 |
 
@@ -1093,7 +1093,7 @@ f=2.8 mm를 핀홀 모델(`r = f·tanθ`)에 넣으면 대각 화각이 **96.5°
 
 핀홀 투영을 나눗셈이 아니라 외적 잔차(`a·Z − fx·X = 0`)로 쓰면 미지수 6개에 대해
 완전히 선형이라, `np.linalg.lstsq` 한 번으로 반복·초기추정·수렴실패 없이 풀린다.
-수식은 [`algorithm.md`](algorithm.md) 참고.
+수식은 [`docs/algorithm.md`](docs/algorithm.md) 참고.
 
 ### 실측으로 알게 된 것 — 계산만으로는 부족했다
 

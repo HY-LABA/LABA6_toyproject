@@ -2,7 +2,7 @@
 
 > 2026-09-15 갱신. **지금 남은 것만** 적는다. 왜 그렇게 됐는지는 [`../CHANGELOG.md`](../CHANGELOG.md),
 > 리스크 분석은 [`../docs/open-questions.md`](../docs/open-questions.md), 동작 설명은
-> [`../algorithm.md`](../algorithm.md).
+> [`../docs/algorithm.md`](../docs/algorithm.md).
 
 ## 1. 실측으로 확정된 값 (`config.py`)
 
@@ -32,7 +32,7 @@
 - [ ] **실기 잔차 분포** → `MAX_RESIDUAL_PX` 결정. 로봇이 움직이면 정지 천장점이 궤적으로
       채택되는데(시뮬 0.5 m/s에서 47.5%), 잔차로 갈린다. `--max-residual-px 3.0` 으로 시험
 - [ ] **카메라 기울기 3.9°** — 재장착 때 낮춰 달거나 `GRAVITY_CAM` 을 회전
-- [ ] **합성 투척 성능 표 재실행** — [`algorithm.md` 6장](../algorithm.md#6-검증된-성능) 표가
+- [ ] **합성 투척 성능 표 재실행** — [`docs/algorithm.md` 6장](../docs/algorithm.md#6-검증된-성능) 표가
       실측 렌즈(f_px 973, 어안)와 다른 조건(f_px 1739)에서 나왔다
 
 ## 3. 코드로 해야 할 것

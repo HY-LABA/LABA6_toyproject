@@ -7,7 +7,7 @@
 ↔ [`pico/communication.c`](../pico/communication.c)
 (MicroPython 판: [`pico_micropython/communication.py`](../pico_micropython/communication.py) — 프레임 포맷 동일)
 
-관련 문서: [동작 로직](../algorithm.md) · [피코 제어](pico-control.md)
+관련 문서: [동작 로직](algorithm.md) · [피코 제어](pico-control.md)
 
 ---
 
@@ -60,7 +60,7 @@ CHECKSUM = sum(PAYLOAD) % 256
 
 > **`time_remaining_s` 는 실제 남은시간이 아니다.** 파이가 `config.DRIVE_AGGRESSION`(현재
 > 8.0)으로 나눠서 보낸다 — 초반부터 최고속도로 붙게 하려는 의도다
-> ([algorithm.md 5장](../algorithm.md#5-제어-루프-pi5mainpy-controlpy)). 피코는 받은 값을
+> ([algorithm.md 5장](algorithm.md#5-제어-루프-pi5mainpy-controlpy)). 피코는 받은 값을
 > 그대로 쓰므로 프로토콜은 바뀌지 않았다.
 
 피코가 해야 하는 계산:

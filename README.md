@@ -44,7 +44,7 @@ u = fx·X/Z + cx          →    a·Z(t) − fx·X(t) = 0        where a = u −
 Gravity enters as the inhomogeneous term — and that is precisely what makes
 the solution unique rather than a family of solutions differing by scale.
 
-Full derivation: [`algorithm.md`](algorithm.md) · Physics: [`docs/physics.md`](docs/physics.md)
+Full derivation: [`docs/algorithm.md`](docs/algorithm.md) · Physics: [`docs/physics.md`](docs/physics.md)
 
 ---
 
@@ -226,8 +226,8 @@ The English documents are listed first.
 | [docs/bom.md](docs/bom.md) | English | Bill of materials, substitutions |
 | [docs/getting-started.md](docs/getting-started.md) | English | Setup, calibration, first run |
 | [docs/results.md](docs/results.md) | English | What was measured, and what was not |
-| [algorithm.md](algorithm.md) | 한국어 | The estimator, the control loop, parameters |
-| [architecture.md](architecture.md) | 한국어 | File-by-file responsibilities, data flow |
+| [algorithm.md](docs/algorithm.md) | 한국어 | The estimator, the control loop, parameters |
+| [architecture.md](docs/architecture.md) | 한국어 | File-by-file responsibilities, data flow |
 | [docs/physics.md](docs/physics.md) | 한국어 | Motion model, friction, catch radius, optics |
 | [docs/hardware.md](docs/hardware.md) | 한국어 | Parts, power, mounting conventions |
 | [docs/pico-control.md](docs/pico-control.md) | 한국어 | Real-time loop, kinematics, odometry, PID |
@@ -236,7 +236,7 @@ The English documents are listed first.
 | [docs/open-questions.md](docs/open-questions.md) | 한국어 | Unresolved risks, honestly listed |
 | [CHANGELOG.md](CHANGELOG.md) | 한국어 | Every design change and why it happened |
 
-If you read one document, read [`algorithm.md`](algorithm.md). If you read
+If you read one document, read [`docs/algorithm.md`](docs/algorithm.md). If you read
 two, add [`docs/open-questions.md`](docs/open-questions.md) — it is the list
 of things we know are wrong.
 

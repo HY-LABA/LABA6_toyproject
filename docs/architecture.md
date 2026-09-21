@@ -2,8 +2,8 @@
 
 > 2026-09-15 개정. 몸체가 완성돼 **`main.py` ↔ 피코 왕복으로 실물 로봇이 주행한다** (2026-09-09~).
 > 물체를 보고 방향을 잡아 끝까지 달리는 데까지는 됐고, 남은 건 방향 기준 확정과 모터 한계
-> 실측이다(5장). 계약은 [`docs/protocol.md`](docs/protocol.md), 알고리즘·제어 루프는
-> [`algorithm.md`](algorithm.md), 경위는 [`CHANGELOG.md`](CHANGELOG.md).
+> 실측이다(5장). 계약은 [`docs/protocol.md`](protocol.md), 알고리즘·제어 루프는
+> [`algorithm.md`](algorithm.md), 경위는 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## 1. 파일 구조
 
@@ -112,7 +112,7 @@ LABA6_toyproject/
 
 ### pico/ (C, Pico SDK) — 실시간 모터 제어
 
-`pico_micropython/` 이 같은 구조·같은 식의 MicroPython 판이다. 설계 설명은 [`docs/pico-control.md`](docs/pico-control.md).
+`pico_micropython/` 이 같은 구조·같은 식의 MicroPython 판이다. 설계 설명은 [`docs/pico-control.md`](pico-control.md).
 
 | 파일 | 담당 기능 |
 |---|---|
@@ -183,7 +183,7 @@ LABA6_toyproject/
 | 파이5 → 피코 ② | `<fff>` target_vx, target_vy, timeout_s (텔레옵·정지) | 12 B |
 | 피코 → 파이5 | `<ffffff>` x, y, theta, vx, vy, omega | 24 B |
 
-상세는 [`docs/protocol.md`](docs/protocol.md).
+상세는 [`docs/protocol.md`](protocol.md).
 
 ### 4-3. 피코 실시간 루프 — `main.c` (20 ms)
 
@@ -213,5 +213,5 @@ LABA6_toyproject/
 | 4 | **투척 영역 규약** ⏳ | 09-09 실기 투척 둘이 3.8·2.5 m/s 를 요구했다 — 인식이 아니라 물리적으로 못 잡는 투척이 섞이면 성공률로 아무것도 판단할 수 없다 |
 | 5 | **주행 중 오탐·잔차 실측** (`MAX_RESIDUAL_PX`) ⏳ | 합성에서 로봇 0.5 m/s 면 정지 천장점이 궤적으로 채택되는 비율이 크다 |
 
-미해결 리스크 전체는 [`docs/open-questions.md`](docs/open-questions.md), 할 일은
-[`pi5/TODO.md`](pi5/TODO.md) · [`pico/TODO.md`](pico/TODO.md).
+미해결 리스크 전체는 [`docs/open-questions.md`](open-questions.md), 할 일은
+[`pi5/TODO.md`](../pi5/TODO.md) · [`pico/TODO.md`](../pico/TODO.md).

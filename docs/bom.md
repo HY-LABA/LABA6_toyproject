@@ -171,7 +171,7 @@ rate, this gets a lot cheaper.
 | Part | Free to swap? | Why |
 |---|---|---|
 | Raspberry Pi 5 | Yes, with care | Any Linux SBC that can run Picamera2 and your NPU's runtime. The vision loop needs to hold ~60 fps |
-| AI HAT+ / Hailo-8L | Yes | Any accelerator, or CPU inference if you accept fewer frames. Fewer observations means a worse fit — see [`algorithm.md`](../algorithm.md) |
+| AI HAT+ / Hailo-8L | Yes | Any accelerator, or CPU inference if you accept fewer frames. Fewer observations means a worse fit — see [`algorithm.md`](algorithm.md) |
 | Camera | **Global shutter only** | See above |
 | Lens | Yes, but recalibrate | Wider sees the object longer; narrower resolves depth better. Ours is 133.5° diagonal |
 | Motors | Yes | Update `WHEEL_MAX_SPEED_MPS`, `ENCODER_COUNTS_PER_REV`, and the PID gains |
