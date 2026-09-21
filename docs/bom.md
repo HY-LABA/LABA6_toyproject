@@ -130,16 +130,24 @@ centimetre of catch radius, essentially for free.
 
 | Property | Design | As built |
 |---|---|---|
-| Opening diameter | 300 mm | **260 mm** |
+| Outer diameter | 300 mm | 300 mm |
+| **Clear opening** (inside the rim) | — | **260 mm** |
+| Overall height | — | 490 mm |
 | Depth | 200–250 mm | |
 | Shape | circular | The robot never rotates, so orientation does not matter |
 | Lining | foam or cloth | Stops objects bouncing back out |
 | Camera position | at the rim, facing up | 160 mm forward of the centre of rotation, 30 mm above the rim plane |
 
-Those last two numbers are not decoration — they are
-`CAMERA_OFFSET_M` and `CATCH_HEIGHT_M` in
-[`config.py`](../pi5/config.py). **Measure yours and put them in.** With the
-offset at zero the robot parks 16 cm off target on every single throw.
+> **Measure the clear opening, not the outer diameter.** Ours is 300 mm
+> across the outside and **260 mm** inside the rim. The object has to fall
+> through the opening, so 260 mm is the number that goes into
+> `CATCH_OPENING_DIAMETER_M` and into every catch-radius calculation — a
+> 20 mm rim quietly costs you 20 mm of catch radius.
+
+The camera numbers are not decoration either — they are `CAMERA_OFFSET_M` and
+`CATCH_HEIGHT_M` in [`config.py`](../pi5/config.py). **Measure yours and put
+them in.** With the offset left at zero the robot parks 16 cm off target on
+every single throw.
 
 Sizing rationale is in [`physics.md` §6](physics.md).
 
