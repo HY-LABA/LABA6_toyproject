@@ -1,13 +1,242 @@
 # Results
 
-What was measured, how, and what was not measured. The distinction between
-**simulated** and **on the physical robot** is kept explicit throughout,
-because most of the encouraging numbers are simulated and most of the
-difficult ones are physical.
+## The short version
+
+**The robot catches about half of what is thrown into the region it can
+physically reach, and nothing outside it.**
+
+| | |
+|---|---|
+| Catch rate, inside the reachable envelope | **~50%** (n = 10) |
+| Catch rate, outside it | **0%** |
+| Reachable radius in the available time | **~40 cm** |
+
+The bottleneck is the **drive**, not the perception or the estimator. We
+tested five candidate causes and eliminated four of them. The conclusion we
+reached is that **the motors chosen were unsuitable for this task**, and that
+further work on the detector — more training data, a better model — would not
+have changed the outcome.
+
+That last point is worth stating plainly, because it was the question the
+project set out to answer. **More data would not have helped.** The robot was
+not failing to see the object; it was failing to arrive.
 
 ---
 
-## 1. Camera calibration — physical ✅
+## How the bottleneck was found
+
+Five candidates, each tested independently:
+
+| # | Candidate | Verdict |
+|---|---|---|
+| 1 | Trajectory estimation code | ❌ Not the cause |
+| 2 | YOLO detection | ❌ Not the cause |
+| 3 | Pi ↔ Pico communication | ❌ Not the cause |
+| 4 | **Motor performance** | ✅ **This is it** |
+| 5 | Direction-dependent failures | ❌ Explained by #4 |
+
+---
+
+## 1. Trajectory estimation — not the cause
+
+Tested against synthetic parabolas with known ground truth, sweeping
+detection noise against observation count.
+
+**With zero noise, every configuration from 5 to 20 observations fitted
+successfully with 0.0000 cm landing error.** The mathematics and the
+implementation are correct.
+
+With noise, the picture changes sharply — and the sensitivity is to
+**observation count** more than to noise level:
+
+| Noise | n=10 | n=20 | n=25 | n=30 | n=35 |
+|---|---|---|---|---|---|
+| 0.5 px | 87.4 cm | 8.3 cm | 3.4 cm | 2.6 cm | **1.4 cm** |
+| 1.0 px | 156.2 cm | 33.4 cm | 12.6 cm | 7.7 cm | **3.8 cm** |
+| 1.5 px | 176.4 cm | 60.4 cm | 26.2 cm | 17.7 cm | **7.2 cm** |
+| 2.0 px | 194.8 cm | 86.3 cm | 43.9 cm | 32.2 cm | **16.4 cm** |
+
+(median landing error; at 60 fps, n=30 is a 0.50 s observation span)
+
+Fit success rate follows the same shape — at 1.0 px noise it climbs from 67%
+at n=10 to 99% at n=30.
+
+**The real system observes for 0.4–0.5 s, i.e. n ≈ 25–30.** That lands in the
+region where median error is a few centimetres but the 90th percentile is
+still tens of centimetres — the estimator is usable there, but it is not
+comfortable. Every additional frame of observation is worth a lot.
+
+**Conclusion:** the estimator works. Its accuracy is governed by how many
+good observations it gets, which makes detection quality and observation
+window the levers — not the solver.
+
+---
+
+## 2. YOLO detection — not the cause
+
+Three recorded throws were checked frame by frame offline. The detector found
+the object correctly throughout, and bounding-box centres were produced at
+**60 per second**.
+
+**One real limitation:** when the object visually overlaps a ceiling light,
+detection fails for those frames. Since this tends to happen early in flight
+— the object is high, near the lights — it delays the start of the
+observation window, which per §1 is exactly the quantity that matters.
+
+**Conclusion:** detection is not what is losing catches. It is good enough
+that improving it further has no effect while the drive remains the limit.
+
+---
+
+## 3. Pi ↔ Pico communication — not the cause
+
+Both directions are non-blocking and stateless: the Pico streams odometry
+continuously rather than replying to requests, and the Pi sends a target
+whenever a fit succeeds. Each side reads to the newest frame and discards the
+rest.
+
+| Direction | Measured | Note |
+|---|---|---|
+| Odometry, Pico → Pi | **50 Hz** | Equal to the Pico's 50 Hz control loop — i.e. no frames lost |
+| Commands, Pi → Pico | **20–44 Hz** | Event-driven, not periodic: only sent when a fit succeeds |
+
+**Conclusion:** the link runs at the design ceiling. Not a bottleneck.
+
+---
+
+## 4. Motor performance — this is the bottleneck
+
+### What was measured
+
+| | |
+|---|---|
+| Speed over 1 m | **0.8 m/s** |
+| Speed over 2 m | **0.9 m/s** |
+| Time remaining after detection and prediction | **0.56 s mean** (range 0.5–0.6 s) |
+| Distance coverable in that window | **~40 cm** |
+
+That 40 cm is the whole story. An object landing further than ~40 cm from the
+robot's starting position cannot be caught, no matter how good the
+perception is.
+
+### Why the window is so short
+
+The time available is the flight time minus the perception and prediction
+delay:
+
+```
+T = flight time − (detection + fitting delay)
+  ≈ 0.6 s − 0.15 s ≈ 0.45 s          (for a 2 m throw)
+```
+
+And reachable distance grows as T² in this regime, because the robot never
+reaches top speed — it is still accelerating when the object lands:
+
+| T | Distance passed (cm) | Distance with a full stop (cm) |
+|---|---|---|
+| 0.30 s | 8–9 | 5 |
+| **0.45 s** | **18–21** | 10–12 |
+| **0.60 s** | **32–38** | 18–21 |
+| 0.80 s | 55–65 | 33–38 |
+| 1.00 s | 80–93 | 51–59 |
+| 1.50 s | 141–164 | 110–128 |
+
+*Passed* means the bin was at that point at time T — which is all that is
+required, since the object only needs the bin to be there at the moment it
+lands. *With a full stop* additionally requires decelerating to rest.
+
+**Going from T = 0.45 s to T = 0.60 s nearly doubles the reachable distance**
+(18–21 cm → 32–38 cm). In the T² regime, shaving latency is worth far more
+than it intuitively seems.
+
+### Why acceleration, not top speed, is the limit
+
+Per wheel, the motors can deliver about **35 N**. The floor can only
+transmit about **4.9 N** (μ ≈ 0.5). Acceleration is therefore limited by
+traction by a factor of seven, and a faster or more powerful motor would
+change nothing:
+
+| Direction | Max acceleration | Time to reach top speed |
+|---|---|---|
+| Hexagon edge (worst) | 1.77 m/s² | ~0.7 s |
+| Hexagon vertex (best) | 2.09 m/s² | ~0.7 s |
+
+Since the entire catch window is ~0.5 s and top speed needs ~0.7 s, **the
+robot never reaches top speed during a catch.** Specifying a faster motor
+would not have helped. A lighter robot, better tyres, or lower latency would.
+
+Two mechanical effects also work against us:
+
+- **Wheel slip on launch.** Commanding duty too abruptly exceeds traction,
+  the wheels spin, and the encoders over-report distance travelled.
+- **Dragged idle wheel.** A wheel commanded to zero duty coasts and is
+  dragged by roller friction. It can be held with a short brake or a
+  zero-target PID; the current firmware does neither.
+
+---
+
+## 5. Direction-dependent failures — explained by #4
+
+Throws arriving from certain directions failed more often. This turned out
+not to be a perception or estimation effect.
+
+A three-wheel omni platform has a **hexagonal** velocity envelope. The
+maximum speed in a given direction is set by whichever wheel has to turn
+fastest:
+
+| Direction | M1 | M2 | M3 | Max speed |
+|---|---|---|---|---|
+| 0° (toward M1) — vertex | 0 | −100% | +100% | **1.41 m/s** |
+| 15° | −27% | −73% | +100% | 1.26 m/s |
+| 30° — edge midpoint | −50% | −50% | +100% | **1.22 m/s** |
+| 45° | −73% | −27% | +100% | 1.26 m/s |
+| 60° (between M1 and M3) — vertex | −100% | 0 | +100% | **1.41 m/s** |
+
+At a vertex one wheel is idle and the other two share the load equally; at an
+edge midpoint one wheel does twice the work of the other two and saturates
+first. The spread is about **15%**, and it propagates into reachable
+distance.
+
+**Conclusion:** the directional weakness is a property of the drive geometry,
+not a bug in detection or fitting. Reach is simply smaller along the hexagon
+edges.
+
+> ⚠️ A related and still-unresolved problem: if the configured wheel speed
+> limit is set **above** what the motors actually deliver, an edge-direction
+> command saturates one wheel while the other two track correctly. The ratio
+> between wheels breaks, and the robot curves instead of translating. See
+> [Known limitations](../README.md#known-limitations).
+
+---
+
+## What this means
+
+1. **The motors were the wrong choice for this task.** Not because they are
+   slow — because the catch window is shorter than the time needed to reach
+   any useful speed, and acceleration is traction-limited anyway.
+
+2. **Improving the detector would not have improved catch rate.** The project
+   began with the question of whether more training data would help. The
+   answer, for this robot, is no: perception was already delivering correct
+   detections at 60 fps, and the failures were downstream of it. Collecting
+   more data would have consumed effort for zero measurable gain.
+
+3. **Latency is worth more than speed.** Reachable distance goes as T², so
+   0.15 s of perception delay costs roughly half the reachable area. Effort
+   spent shortening the pipeline would have paid better than effort spent on
+   the motors.
+
+4. **The estimator is sound and is not the constraint.** Zero-noise synthetic
+   throws fit exactly. Real-world accuracy is set by the number of clean
+   observations available, which is bounded by flight time and by how early
+   detection begins.
+
+If this project were continued, the order would be: reduce latency → reduce
+robot mass → improve traction → and only then reconsider motors.
+
+---
+
+## Camera calibration — verified
 
 | | |
 |---|---|
@@ -16,262 +245,42 @@ difficult ones are physical.
 | Reprojection RMS | **0.411 px** |
 | Focal length | **973 px** |
 | Field of view | **133.5° diagonal / 94.0° horizontal** |
-| Distortion | (−0.134, 0.028, −0.045, 0.029) |
 
-Cross-checked against a grid target at known distance.
+The bundled lens was labelled "2.8 mm, D148°". Measured diagonal is 133.5°.
+More importantly, the label implied a pinhole-equivalent f_px of 755 while
+the true value is 973 — trusting the label would have introduced a 29% depth
+bias.
 
-The bundled lens was labelled "2.8 mm, D148°". Measured diagonal is 133.5° —
-a 3.3% disagreement with the label, which is normal. What matters more is
-that **the label implied a pinhole-equivalent f_px of 755, while the true
-value is 973.** Trusting the label would have introduced a 29% depth bias.
-
-### The model choice is not cosmetic
-
-Running this lens through a pinhole model, with everything else correct:
-
-| Incidence angle | Depth error |
-|---|---|
-| 44° | 2.1 cm |
-| 62° | 10.4 cm |
-| 72° | 37.7 cm |
-| 80° | **158.7 cm** |
-
-The reprojection residual at that last row is **1.90 px** — comfortably
-inside any sane gate. The estimator is confidently, catastrophically wrong
-and nothing flags it. Projection models cannot be validated by residual;
-they have to be measured.
+**The projection model cannot be validated by reprojection residual.** With
+this lens fed through a pinhole model, an incidence angle of 80° produces a
+**158.7 cm** depth error while the residual stays at **1.90 px** — inside any
+reasonable gate. The estimator is confidently wrong and nothing flags it. The
+model has to be measured, not inferred.
 
 ---
 
-## 2. Trajectory estimation — simulated ✅
-
-150 synthetic throws per row, median values. Detection noise is injected as
-Gaussian error on the bounding-box centre.
-
-| Drop height | Noise | Flight | Frames | First prediction | Time left to move | First error | Final error | Success |
-|---|---|---|---|---|---|---|---|---|
-| 1.5 m | 1.0 px | 0.73 s | 41 | 0.47 s | 0.26 s | 2.2 cm | 0.1 cm | 100% |
-| 2.0 m | 1.0 px | 0.81 s | 46 | 0.53 s | 0.28 s | 2.9 cm | 0.2 cm | 100% |
-| 2.5 m | 0.5 px | 0.88 s | 50 | 0.48 s | **0.40 s** | 4.3 cm | 0.1 cm | 100% |
-| 2.5 m | 1.0 px | 0.88 s | 50 | 0.62 s | 0.27 s | 2.9 cm | 0.4 cm | 100% |
-| 2.5 m | 2.0 px | 0.88 s | 50 | 0.78 s | 0.10 s | 2.2 cm | 1.5 cm | **30%** |
-| 3.0 m | 1.0 px | 0.95 s | 53 | 0.65 s | 0.30 s | 3.6 cm | 1.0 cm | 99% |
-
-### The conclusion that matters
-
-**Detection noise, not the estimator, decides whether a catch happens.**
-
-Compare the 2.5 m rows. Going from 0.5 px to 2.0 px of detection noise does
-not degrade the final prediction much (0.1 cm → 1.5 cm, both well inside the
-13 cm bin radius). What collapses is *when* the prediction becomes
-trustworthy: 0.48 s → 0.78 s after release. Since flight is only 0.88 s,
-the robot's time to move drops from 0.40 s to 0.10 s, and success goes from
-100% to 30%.
-
-So effort spent on sharper detections — shorter exposure, more gain, a
-global shutter, larger pixels — converts directly into catch rate, while
-effort spent on a better estimator does not. This is why the hardware choices
-in the [BOM](bom.md) lean the way they do.
-
-### ⚠️ Caveat
-
-These runs used **f_px = 1739** (a 6 mm lens, 45°×35° FOV), which is not the
-lens that was eventually fitted. At the real f_px of 973, the same pixel
-noise corresponds to roughly **1.8× more angular error**. That is partly
-offset — the wider field keeps the object in frame longer, yielding more
-observations — so it is a trade rather than a straight loss. **This table
-should be re-run at the measured optics.** It has not been.
-
----
-
-## 3. Detection — physical ✅
-
-| | |
-|---|---|
-| Model | YOLOv8n, single class `trash`, transfer-learned from COCO |
-| Inference | Hailo-8L, 640×640 letterboxed |
-| Rate | **60 fps sustained** |
-| Confidence on real throws | 0.83–0.90, continuous through flight |
-
-An early version re-created the Hailo network activation and inference
-streams on every frame. Hoisting that into initialisation was worth a large
-constant factor; before the fix, frame periods could exceed the 150 ms
-control watchdog.
-
-Rotation augmentation is deliberately **off** during training. This pipeline
-consumes only the bounding-box centre, and rotating an image perturbs box
-centres — it damages exactly the signal the estimator depends on. Horizontal
-and vertical flips are used instead.
-
----
-
-## 4. Multi-hypothesis tracking — simulated ✅
-
-YOLO sometimes scores a ceiling fixture higher than the actual object. Taking
-the most confident detection per frame means the real object is invisible on
-those frames, and the contaminated track's residual diverges.
-
-Instead every detection spawns a hypothesis, and the physics decides. A
-stationary false positive cannot be fitted by any parabola, so it is rejected
-on residual.
-
-### Cycle timeout, measured
-
-Before the fix, a cycle could only end once a trajectory had been committed —
-so while the robot was staring at ceiling lights and committing nothing,
-hypotheses accumulated indefinitely. Adding a pre-commitment timeout:
-
-| Robot speed | False-positive frames committed, before | after | change |
-|---|---|---|---|
-| 0.25 m/s | 10.4 | 1.5 | **−86%** |
-| 0.50 m/s | 27.4 | 3.8 | **−86%** |
-| 0.80 m/s | 14.1 | 3.5 | **−75%** |
-
-Counter to expectation: the reset re-enables a "first fit is exempt from the
-depth-convergence check" allowance, which should *increase* false positives.
-It does not, and by a wide margin. While the camera is moving, accumulated
-observations of static points supply increasingly convincing parallax — so
-cutting that accumulation short matters far more than the exemption costs.
-
----
-
-## 5. Early start — simulated ✅
-
-Measured from a real 60 fps log: **17 frames (0.267 s)** elapsed between
-first detection and first motor command. Objects pass overhead 0.10–0.13 s
-after first detection. The robot was departing after the object had already
-gone by.
-
-Bearing, however, is available immediately: an upward-facing camera maps
-screen position to azimuth independently of range. So the robot can commit to
-a direction long before it knows a distance.
-
-| Gating rule | Frames to first command | False positives triggering it |
-|---|---|---|
-| Cumulative displacement ≥ 40 px | 6 | 0% |
-| No gate at all | 3 | **high** |
-| **Screen speed ≥ 350 px/s** | **3** | **0%** |
-
-Screen *speed* separates real throws from stationary false positives far
-better than accumulated displacement, and it is meaningful from the second
-observation rather than the sixth:
-
-| | Screen speed at 3 observations |
-|---|---|
-| Real throws | 406–773 px/s |
-| Static false positive, robot stationary | 56–197 px/s |
-| Static false positive, robot at 0.5 m/s | 120–302 px/s |
-
-The 350 px/s threshold sits 2.7× above the noise floor (~127 px/s at 1.5 px
-detection noise), so noise alone cannot trigger it.
-
-One subtlety: the **direction of travel** is used, not the current bearing.
-Early in flight the object is on the far side of the sky and its current
-bearing points roughly opposite to where it will land. A real log shows the
-vertical image coordinate sweeping 182 → 951 while the true landing point was
-forward.
-
----
-
-## 6. Control loop — physical ✅
-
-| | |
-|---|---|
-| Pico loop | 20 ms (50 Hz), fixed period |
-| Encoder | PIO quadrature, 1× decoding, 687.5 counts per wheel revolution (measured at the output shaft) |
-| Link | USB CDC, both sides drain to the most recent frame |
-| Watchdog | 150 ms, motors stop if commands stop arriving |
-
-Four bugs found by inspection and fixed, each structural rather than
-incidental:
-
-1. **Odometry under-reporting.** Pose was integrated from Kalman-filtered
-   velocity. With the placeholder noise parameters the filter's time constant
-   was ≈1.4 s, against a 0.5 s catch manoeuvre — pose reflected **18%** of
-   real motion (a 50 cm move reported as 8.9 cm). Since the Pico computes
-   speed from `target − pose`, it simply never stopped accelerating. Pose is
-   now integrated from raw velocity; the filter is used only for telemetry.
-
-2. **Missing world→body rotation.** The target direction was passed to
-   inverse kinematics without the `R(−θ)` rotation, valid only while θ ≈ 0 —
-   but θ has no reset and drifts from encoder noise alone.
-
-3. **PID integral not cleared on mode change**, allowing a stale integral to
-   command full duty on the first tick after a switch.
-
-4. **Serial backlog.** The receive path returned after one frame while the
-   sender ran faster than the 50 Hz loop, accumulating unbounded latency.
-   Both sides now drain to the newest complete frame.
-
-None of these produce an error message. All of them produce a robot that
-drives past its target.
-
----
-
-## 7. Real throws — physical ⚠️
-
-Two logged attempts, 2026-09-09:
-
-| | Distance to target | Time remaining | Speed required | Robot capability |
-|---|---|---|---|---|
-| Throw 1 | 1.57 m | 0.41 s | **3.8 m/s** | ~1.2–1.4 m/s |
-| Throw 2 | 0.49 m | 0.20 s | **2.5 m/s** | ~1.2–1.4 m/s |
-
-Detection was clean in both cases — 60 fps continuous, confidence 0.83–0.90.
-The predictions were produced on time. **Both failures were physically
-impossible catches**, not perception failures.
-
-This is the single most important result in this document, and it is a
-negative one: **until throws are constrained to the reachable region, catch
-rate measures the thrower, not the robot.** Any study of whether more
-training data improves performance has to separate these trials out first, or
-the improvement is invisible underneath them.
-
-`run.log` records distance and time remaining per cycle, so
-`required speed = distance ÷ time` can be computed automatically for every
-trial and used as a filter.
-
----
-
-## 8. Not measured
-
-Honestly, this is the longer list.
+## Not measured
 
 | | Why it matters |
 |---|---|
-| **Catch success rate** | The headline number. Never measured systematically |
-| **Maximum speed** | `WHEEL_MAX_SPEED_MPS` = 1.8 is a raised software clamp, not a measurement. Theory says 1.22 |
-| **Acceleration and stopping distance** | The controller is tuned for full-speed approach (`DRIVE_AGGRESSION = 8`). Whether overshoot stays inside the 13 cm bin radius is unknown |
-| **Odometry scale and slip** | Never compared against a tape measure. Motors can deliver ~6× the torque friction can absorb, so slip is expected |
-| **Residual distribution on real throws** | `MAX_RESIDUAL_PX = 6.0` was chosen from simulation |
-| **False positives while driving** | Simulation says a moving camera makes static points look parabolic. Never quantified on hardware |
-| **Loop rate under load** | No fps logging exists. Whether the 150 ms watchdog is ever exceeded is unknown |
-| **Camera tilt compensation** | Measured at 3.9°, worth ~4 cm of landing error. The estimator assumes a vertical optical axis and cannot correct it |
+| **Wheel speed limit** | `WHEEL_MAX_SPEED_MPS` is a raised software clamp, not a measurement. The reach figures above use a calculated 1.22–1.41 m/s |
+| **Friction coefficient, effective mass** | μ = 0.5 and 3.5 kg are assumptions. Every acceleration and reach number inherits them |
+| **Stopping distance** | The controller drives at full speed to the target. Whether overshoot stays inside the 13 cm bin radius is unknown |
+| **Odometry scale and slip** | Never compared against a tape measure, despite slip being expected |
+| **Loop rate under load** | No fps logging exists; whether the 150 ms watchdog is ever exceeded is unknown |
+| **Camera tilt** | Measured at 3.9°, worth ~4 cm of landing error. The estimator assumes a vertical optical axis and cannot correct it |
 
-The tools for most of these exist — `pico_test.py --max` for stopping
-distance, `teleop_test.py --speed-test` for top speed, `test_accuracy.py` for
-prediction error against measured ground truth. They were written; they were
-not run before the project ended.
+The tools for most of these exist in the repository — `pico_test.py --max`
+for stopping distance, `teleop_test.py --speed-test` for top speed,
+`test_accuracy.py` for prediction error against measured ground truth. They
+were written but not run before the project ended.
 
 ---
 
-## 9. If you are continuing this work
+## Sources
 
-In priority order:
-
-1. **Measure the wheel speed limit** and set it in all three config files.
-   Everything downstream — reachability, the speed envelope, whether lateral
-   motion tracks straight — depends on this number being real.
-2. **Define a reachable throwing region** from measured acceleration and
-   stopping distance, and constrain trials to it. Without this, §7 repeats.
-3. **Find the root cause of the direction inversion** instead of
-   compensating with `DRIVE_INVERT`.
-4. **Add loop-rate logging.** One line every N frames. There is currently no
-   way to tell whether the watchdog is being exceeded.
-5. **Re-run §2 at the measured optics.** The headline estimator numbers are
-   from a lens that was never fitted.
-
-Design rationale for the constants involved is in
+Figures in §1–§5 are from the project's final report (LABA 6th cohort,
+Hanyang University, 2026). Design rationale for the constants involved is in
 [`algorithm.md`](../algorithm.md) and [`physics.md`](physics.md); the full
-list of known-unresolved issues is [`open-questions.md`](open-questions.md)
-(Korean).
+list of known-unresolved issues is in
+[`open-questions.md`](open-questions.md) (Korean).

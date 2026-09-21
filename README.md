@@ -48,22 +48,42 @@ Full derivation: [`algorithm.md`](algorithm.md) · Physics: [`docs/physics.md`](
 
 ---
 
-## Status
+## Status — and the honest result
 
-**Working end to end.** The robot detects a thrown object, predicts its
-landing point, and drives there. It has not been through a systematic
-catch-rate evaluation, and several things below are known to be imperfect.
+**It works end to end, and it catches about half of what lands within roughly
+40 cm of it. Outside that radius it catches nothing.**
 
 | | |
 |---|---|
-| ✅ Object detection | Custom YOLOv8n on a Hailo-8L, **60 fps sustained** |
-| ✅ Trajectory estimation | Validated in simulation; median final error 0.1–0.4 cm |
-| ✅ Camera calibration | 23 chessboard images, RMS 0.411 px, fisheye model |
-| ✅ Pi ↔ Pico control loop | 50 Hz, closed loop on wheel encoders |
-| ✅ Drives to the predicted point | Including an early-start path that commits on 3 frames |
-| ⚠️ Catch success rate | **Not systematically measured** |
-| ⚠️ Maximum speed | The configured limit is a guess, not a measurement |
-| ⚠️ Lateral motion | Curves under saturation — see [Known limitations](#known-limitations) |
+| Catch rate inside the reachable region | **~50%** (n = 10) |
+| Catch rate outside it | **0%** |
+| Reachable radius in the time available | **~40 cm** |
+
+The bottleneck is the **drive, not the vision.** We tested five candidate
+causes and eliminated four:
+
+| Candidate | Verdict |
+|---|---|
+| Trajectory estimation | ❌ Not it — fits synthetic throws to 0.0000 cm |
+| YOLO detection | ❌ Not it — 60 fps, correct throughout flight |
+| Pi ↔ Pico communication | ❌ Not it — 50 Hz, at the design ceiling |
+| **Motor performance** | ✅ **This is it** |
+| Direction-dependent failures | ❌ A consequence of the above |
+
+The catch window is about **0.56 s** after detection and prediction, and
+reachable distance grows as T² because the robot is still accelerating when
+the object lands — it never reaches top speed. Acceleration is limited by
+floor traction (4.9 N per wheel) rather than by the motors (35 N per wheel),
+so a more powerful motor would not have helped either.
+
+**The project set out to ask whether more training data would improve
+catching. For this robot the answer is no** — perception was already
+delivering correct detections at 60 fps, and every failure was downstream of
+it. That is a useful negative result, and it is why no further dataset
+collection was done.
+
+Full analysis, with the elimination evidence for each candidate:
+**[docs/results.md](docs/results.md)**.
 
 This was a student project at [HY-LABA](https://github.com/HY-LABA), Hanyang
 University. It is published because the approach — and the reasoning behind
@@ -224,28 +244,50 @@ of things we know are wrong.
 
 ## Results
 
-Synthetic throws at the design camera spec, 150 runs per row, median:
+### How far it can actually go
 
-| Drop height | Detection noise | First prediction | Time left to move | Final error | Success |
-|---|---|---|---|---|---|
-| 1.5 m | 1.0 px | 0.47 s | 0.26 s | 0.1 cm | 100% |
-| 2.0 m | 1.0 px | 0.53 s | 0.28 s | 0.2 cm | 100% |
-| 2.5 m | 0.5 px | 0.48 s | **0.40 s** | 0.1 cm | 100% |
-| 2.5 m | 2.0 px | 0.78 s | 0.10 s | 1.5 cm | **30%** |
-| 3.0 m | 1.0 px | 0.65 s | 0.30 s | 1.0 cm | 99% |
+Reachable distance against the time available, where T is flight time minus
+perception and prediction delay. The two columns are the best and worst
+directions — the velocity envelope of a three-wheel omni is a hexagon, so
+reach varies about 15% with direction.
 
-**Detection noise dominates everything.** The estimator is not the
-bottleneck — at 0.5 px the robot gets 0.40 s to move; at 2.0 px it gets
-0.10 s and mostly fails. Motion blur suppression (short exposure, high gain)
-converts directly into catch performance, which is where a global shutter
-with large pixels earns its cost.
+| T | Distance passed | With a full stop |
+|---|---|---|
+| 0.30 s | 8–9 cm | 5 cm |
+| **0.45 s** | **18–21 cm** | 10–12 cm |
+| **0.60 s** | **32–38 cm** | 18–21 cm |
+| 0.80 s | 55–65 cm | 33–38 cm |
+| 1.00 s | 80–93 cm | 51–59 cm |
 
-> ⚠️ These are **simulations**, run at f_px = 1739. The lens actually fitted
-> measures f_px = 973, so the same pixel noise is ~1.8× more angular error —
-> partly offset by the wider field of view keeping the object in frame for
-> longer. **This table needs re-running against the real optics.**
+Measured time available after detection and prediction: **0.56 s on average.**
+That is the ~40 cm figure, and it is the whole ballgame.
 
-What was verified on the physical robot, and what was not, is in
+Note the shape: **going from 0.45 s to 0.60 s nearly doubles the reach.**
+In this regime distance grows as T², so latency is worth far more than motor
+power. Cutting 0.15 s from the pipeline would buy more than any plausible
+motor upgrade.
+
+### Where the estimator stands
+
+Synthetic throws, median landing error by detection noise and observation
+count:
+
+| Noise | n=10 | n=20 | n=30 | n=35 |
+|---|---|---|---|---|
+| 0 px | 0.0000 cm at every count tested | | | |
+| 0.5 px | 87.4 cm | 8.3 cm | 2.6 cm | **1.4 cm** |
+| 1.0 px | 156.2 cm | 33.4 cm | 7.7 cm | **3.8 cm** |
+| 2.0 px | 194.8 cm | 86.3 cm | 32.2 cm | **16.4 cm** |
+
+With clean input the solver is exact. What it needs is **observations** — at
+60 fps, n=30 is half a second of flight. The real system gets 0.4–0.5 s,
+which is just barely enough.
+
+This is why detection quality matters even though detection is not the
+bottleneck: earlier detection means more observations, and more observations
+move you left-to-right across that table very quickly.
+
+Full elimination evidence for each candidate cause:
 [`docs/results.md`](docs/results.md).
 
 ---
@@ -274,10 +316,17 @@ Full list in [`docs/open-questions.md`](docs/open-questions.md).
   is exactly vertical. Ours is off by ~3.9°, worth roughly 4 cm of landing
   error.
 
-- **Many real throws are physically uncatchable.** Two logged attempts
-  required 3.8 and 2.5 m/s; the robot does about 1.2–1.4 m/s. Detection was
-  flawless in both. Any evaluation has to separate "missed because
-  perception failed" from "missed because no robot could have made it."
+- **Detection fails against ceiling lights.** When the object visually
+  overlaps a light fixture it is not detected for those frames. This happens
+  early in flight, when the object is high — which is exactly when losing
+  frames hurts most, since it delays the start of the observation window.
+
+- **Most throws are simply out of reach.** With a ~40 cm radius, anything
+  thrown further away cannot be caught regardless of how well the rest of the
+  system performs. Any evaluation of this robot has to separate "missed
+  because perception failed" from "missed because no robot could have made
+  it" — otherwise the second category swamps the first and nothing is
+  measurable.
 
 ---
 
