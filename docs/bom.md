@@ -88,7 +88,7 @@ noisy and will brown out a Pi if they share a rail.
 
 | # | Part | Spec | Qty | Unit (KRW) | Notes |
 |---|---|---|---|---|---|
-| 13 | 3S LiPo battery | 11.1 V, 2200 mAh, XT60, 14 AWG | 1 | 27,000 | **Motor rail only** |
+| 13 | 3S LiPo battery | 11.1 V, 2200 mAh, **55C**, XT60, 14 AWG | 1 | ~27,000 | **Motor rail only** |
 | 14 | Matek PDB-XT60 power distribution board | XT60 in, dual BEC 5 V / 12 V, 18 AWG out | 1 | 7,800 | Splits the motor rail three ways |
 | 15 | 18650 UPS module (X1200 v1.2) | 5 V 5 A, 85 × 56 mm | 1 | 49,500 | **Compute rail only.** ~6 h runtime |
 | 16 | 18650 Li-ion cell | 3.7 V, 2200 mAh | 2 | 2,250 | For the UPS module |
@@ -96,9 +96,10 @@ noisy and will brown out a Pi if they share a rail.
 | 18 | Automotive blade fuse | 32 V, 30 A | 2 | 100 | Inline on the battery positive lead |
 | 19 | Fuse holder (SZH-FU004) | ATO/ATC, 12 AWG | 2 | 2,200 | |
 
-> ⚠ Our BOM lists the LiPo as **35C** and the wiring diagram says **55C**.
-> Either is fine for this load — three motors at 7 A stall is 21 A worst
-> case, and 2200 mAh × 35C = 77 A — but check what you actually buy.
+> **On the C rating.** Our purchase list specified a 35C pack; we ended up
+> using a 55C pack that was already in the lab. Either is comfortable here —
+> three motors at 7 A stall is 21 A worst case, and even 2200 mAh × 35C is
+> 77 A. Anything 20C or above has plenty of margin.
 
 ---
 
