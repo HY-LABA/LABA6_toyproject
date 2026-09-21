@@ -18,7 +18,7 @@
 (`992d35f`, `2f6eeb6`). 이론값은 여전히 1.22 m/s(FIT0186 251 RPM × 부하감쇠). 실제 한계가
 1.8 보다 낮은 채로 두면 세 바퀴가 제각각 포화돼 **진행 방향이 틀어진다** — 실측 후 세 파일
 (`pi5/config.py`, `pico/config.h`, `pico_micropython/config.py`)을 같은 값으로 되돌릴 것.
-→ [`docs/open-questions.md`](docs/open-questions.md)
+→ [`docs/open-questions.md`](docs/design/open-questions.md)
 
 ### `teleop_test.py --speed-test` — 고정시간 속도 시험
 
@@ -28,7 +28,7 @@
 ### `pico_micropython/` — 피코 펌웨어 MicroPython 판 (`f8a08db`)
 
 C 판(`pico/`)과 같은 프로토콜·같은 제어식. Thonny 로 올리므로 UF2 빌드가 필요 없고 값을 바로
-고쳐볼 수 있다. C 와의 차이는 [`pico_micropython/README.md`](pico_micropython/README.md). USB 로 `0x03` 바이트가
+고쳐볼 수 있다. C 와의 차이는 [`pico_micropython/README.md`](src/pico_micropython/README.md). USB 로 `0x03` 바이트가
 오면 Ctrl-C 로 먹으므로 `micropython.kbd_intr(-1)` 이 필수다.
 
 ### `prep/capture_roam.py` + `label_throws.py` — 주행하며 녹화, 사람이 라벨
@@ -42,7 +42,7 @@ C 판(`pico/`)과 같은 프로토콜·같은 제어식. Thonny 로 올리므로
 
 몸체 완성 후 첫 실기 주행에서 드러난 것들. 공통 원인은 **깊이가 초반에 과소추정된다**는
 것(관측 4개면 참값의 15%, 13개라도 20~25% — errors-in-variables)과, **물체는 착지 직전에 반드시
-화면을 벗어난다**는 것이다. 설계 전체는 [`docs/algorithm.md` 5장](docs/algorithm.md#5-제어-루프-pi5mainpy-controlpy).
+화면을 벗어난다**는 것이다. 설계 전체는 [`docs/algorithm.md` 5장](docs/design/algorithm.md#5-제어-루프-srcpi5mainpy-controlpy).
 
 ### 물체를 놓쳐도 목표까지 간다 — coast (`112421a`, `9d263ad`)
 
@@ -99,7 +99,7 @@ MicroPython 벤치에서 −1 로 보정했던 값이 C 실기(`pico_test.py`)�
 (기울기 3.9° 도 같이 나옴, 코드가 보정 못 함). 그런데 180° 를 넣자 실기에서 **x, y 가 정확히 반대로**
 갔다. `measure_camera_yaw.py` 는 카메라 방향만 보고 모터 방향은 못 본다 — 구동 쪽이 한 번 더
 뒤집혀 있으면 사진과 실기가 180° 어긋난다. **실기에서 맞는 0 을 쓰되, 두 곳에서 상쇄 중일 수
-있다.** 구동 쪽을 고치면 이 값도 같이 돌려야 한다. → [`docs/open-questions.md`](docs/open-questions.md)
+있다.** 구동 쪽을 고치면 이 값도 같이 돌려야 한다. → [`docs/open-questions.md`](docs/design/open-questions.md)
 
 ---
 
@@ -207,7 +207,7 @@ body 축 값인데 카메라 축에 더하던 걸 같이 고쳤다.
 
 프레임 길이로 16B(목표점)/12B(속도) 를 가른다. 피코가 `남은거리 ÷ 남은시간` 을 직접 계산한다.
 MicroPython 벤치에서 확정한 핀·CPR 687.5·PID {0.6, 0.4, 0}(퍼센트→비율 환산)·PWM 10 kHz·20 ms 주기 이식.
-→ [`docs/protocol.md`](docs/protocol.md), [`docs/pico-control.md`](docs/pico-control.md)
+→ [`docs/protocol.md`](docs/design/protocol.md), [`docs/pico-control.md`](docs/design/pico-control.md)
 
 ### 그 밖 (inseon)
 
@@ -1093,7 +1093,7 @@ f=2.8 mm를 핀홀 모델(`r = f·tanθ`)에 넣으면 대각 화각이 **96.5°
 
 핀홀 투영을 나눗셈이 아니라 외적 잔차(`a·Z − fx·X = 0`)로 쓰면 미지수 6개에 대해
 완전히 선형이라, `np.linalg.lstsq` 한 번으로 반복·초기추정·수렴실패 없이 풀린다.
-수식은 [`docs/algorithm.md`](docs/algorithm.md) 참고.
+수식은 [`docs/algorithm.md`](docs/design/algorithm.md) 참고.
 
 ### 실측으로 알게 된 것 — 계산만으로는 부족했다
 
@@ -1225,7 +1225,7 @@ f=2.8 mm를 핀홀 모델(`r = f·tanθ`)에 넣으면 대각 화각이 **96.5°
 ## 2026-08-02 ~ 08-08 — 수집 도구 개선 (`pi5/prep/`)
 
 실기 작업에서 겪은 문제와 대응. 상세 기록은
-[`pi5/prep/TROUBLESHOOTING.md`](pi5/prep/TROUBLESHOOTING.md)에 있다.
+[`pi5/prep/TROUBLESHOOTING.md`](src/pi5/prep/TROUBLESHOOTING.md)에 있다.
 
 | 문제 | 대응 |
 |---|---|

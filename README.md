@@ -44,7 +44,7 @@ u = fx·X/Z + cx          →    a·Z(t) − fx·X(t) = 0        where a = u −
 Gravity enters as the inhomogeneous term — and that is precisely what makes
 the solution unique rather than a family of solutions differing by scale.
 
-Full derivation: [`docs/algorithm.md`](docs/algorithm.md) · Physics: [`docs/physics.md`](docs/physics.md)
+Full derivation: [`docs/design/algorithm.md`](docs/design/algorithm.md) · Physics: [`docs/design/physics.md`](docs/design/physics.md)
 
 ---
 
@@ -83,7 +83,7 @@ it. That is a useful negative result, and it is why no further dataset
 collection was done.
 
 Full analysis, with the elimination evidence for each candidate:
-**[docs/results.md](docs/results.md)**.
+**[docs/guide/results.md](docs/guide/results.md)**.
 
 This was a student project at [HY-LABA](https://github.com/HY-LABA), Hanyang
 University. It is published because the approach — and the reasoning behind
@@ -149,9 +149,9 @@ Three design decisions are worth knowing about:
 Roughly **KRW 930,000 (~USD 700)** for a complete build; about half of that
 is the Pi 5 and the AI accelerator.
 
-- **[Bill of materials](docs/bom.md)** — every part, with specs and rationale
+- **[Bill of materials](docs/guide/bom.md)** — every part, with specs and rationale
 - **[Wiring diagram](docs/images/wiring-diagram.png)**
-- **[Hardware notes](docs/hardware.md)** — power design, mounting conventions
+- **[Hardware notes](docs/design/hardware.md)** — power design, mounting conventions
 
 Three things that will cost you a rebuild if you get them wrong:
 
@@ -172,7 +172,7 @@ git clone https://github.com/HY-LABA/LABA6_toyproject.git
 cd LABA6_toyproject
 ```
 
-See **[docs/getting-started.md](docs/getting-started.md)** for the full path:
+See **[docs/guide/getting-started.md](docs/guide/getting-started.md)** for the full path:
 dependencies → firmware flash → camera calibration → direction check →
 first run.
 
@@ -183,13 +183,13 @@ the wrong one. (We did.)
 
 ```bash
 # Drive only. No camera, no YOLO.
-python pi5/pico_test.py --port /dev/ttyACM0 --dir front --dist 0.5 --speed 0.3
+python src/pi5/pico_test.py --port /dev/ttyACM0 --dir front --dist 0.5 --speed 0.3
 
 # Prediction only. Robot stationary — measures the estimator in isolation.
-python pi5/test_accuracy.py
+python src/pi5/test_accuracy.py
 
 # Everything.
-python pi5/main.py
+python src/pi5/main.py
 ```
 
 ---
@@ -197,20 +197,24 @@ python pi5/main.py
 ## Repository layout
 
 ```
-pi5/                  Raspberry Pi 5 — Python
-  main.py             frame loop: capture → detect → track → command
-  trajectory.py       the least-squares solver. Pure functions, no state
-  tracker.py          all the state: hypotheses, physics gates, commitment
-  vision.py           Picamera2 + Hailo YOLO + undistortion
-  control.py          landing point → world target; direction-aware speed limits
-  communication.py    USB serial framing
-  config.py           every tunable constant, each with its justification
-  prep/               dataset collection, labelling and training tools
+src/                        all code
+  pi5/                      Raspberry Pi 5 — Python
+    main.py                 frame loop: capture → detect → track → command
+    trajectory.py           the least-squares solver. Pure functions, no state
+    tracker.py              all the state: hypotheses, physics gates, commitment
+    vision.py               Picamera2 + Hailo YOLO + undistortion
+    control.py              landing point → world target; direction-aware speed limits
+    communication.py        USB serial framing
+    config.py               every tunable constant, each with its justification
+    prep/                   dataset collection, labelling and training tools
+  pico/                     Raspberry Pi Pico — C (Pico SDK). Flash the .uf2
+  pico_micropython/         the same firmware in MicroPython, for tuning without reflashing
 
-pico/                 Raspberry Pi Pico — C (Pico SDK). Flash the .uf2
-pico_micropython/     the same firmware in MicroPython, for tuning without reflashing
-
-docs/                 design rationale — "why this number"
+docs/                       all documentation
+  guide/                    start here (English): BOM, getting started, results
+  design/                   design rationale (Korean): "why this number"
+  images/                   wiring diagram, demo
+  archive/                  superseded documents, kept for history
 ```
 
 ---
@@ -223,21 +227,31 @@ The English documents are listed first.
 
 | Document | Language | Contents |
 |---|---|---|
-| [docs/bom.md](docs/bom.md) | English | Bill of materials, substitutions |
-| [docs/getting-started.md](docs/getting-started.md) | English | Setup, calibration, first run |
-| [docs/results.md](docs/results.md) | English | What was measured, and what was not |
-| [algorithm.md](docs/algorithm.md) | 한국어 | The estimator, the control loop, parameters |
-| [architecture.md](docs/architecture.md) | 한국어 | File-by-file responsibilities, data flow |
-| [docs/physics.md](docs/physics.md) | 한국어 | Motion model, friction, catch radius, optics |
-| [docs/hardware.md](docs/hardware.md) | 한국어 | Parts, power, mounting conventions |
-| [docs/pico-control.md](docs/pico-control.md) | 한국어 | Real-time loop, kinematics, odometry, PID |
-| [docs/protocol.md](docs/protocol.md) | 한국어 | The Pi ↔ Pico wire contract |
-| [docs/vision-pipeline.md](docs/vision-pipeline.md) | 한국어 | Dataset, labelling, training, Hailo compilation |
-| [docs/open-questions.md](docs/open-questions.md) | 한국어 | Unresolved risks, honestly listed |
-| [CHANGELOG.md](CHANGELOG.md) | 한국어 | Every design change and why it happened |
+**`docs/guide/` — start here (English)**
 
-If you read one document, read [`docs/algorithm.md`](docs/algorithm.md). If you read
-two, add [`docs/open-questions.md`](docs/open-questions.md) — it is the list
+| Document | Contents |
+|---|---|
+| [bom.md](docs/guide/bom.md) | Bill of materials, substitutions |
+| [getting-started.md](docs/guide/getting-started.md) | Setup, calibration, first run |
+| [results.md](docs/guide/results.md) | What was measured, and what was not |
+
+**`docs/design/` — why every number is what it is (Korean)**
+
+| Document | Contents |
+|---|---|
+| [algorithm.md](docs/design/algorithm.md) | The estimator, the control loop, parameters |
+| [architecture.md](docs/design/architecture.md) | File-by-file responsibilities, data flow |
+| [physics.md](docs/design/physics.md) | Motion model, friction, catch radius, optics |
+| [hardware.md](docs/design/hardware.md) | Parts, power, mounting conventions |
+| [pico-control.md](docs/design/pico-control.md) | Real-time loop, kinematics, odometry, PID |
+| [protocol.md](docs/design/protocol.md) | The Pi ↔ Pico wire contract |
+| [vision-pipeline.md](docs/design/vision-pipeline.md) | Dataset, labelling, training, Hailo compilation |
+| [open-questions.md](docs/design/open-questions.md) | Unresolved risks, honestly listed |
+
+And [CHANGELOG.md](CHANGELOG.md) (Korean) — every design change and why it happened.
+
+If you read one document, read [`docs/design/algorithm.md`](docs/design/algorithm.md). If you read
+two, add [`docs/design/open-questions.md`](docs/design/open-questions.md) — it is the list
 of things we know are wrong.
 
 ---
@@ -288,14 +302,14 @@ bottleneck: earlier detection means more observations, and more observations
 move you left-to-right across that table very quickly.
 
 Full elimination evidence for each candidate cause:
-[`docs/results.md`](docs/results.md).
+[`docs/guide/results.md`](docs/guide/results.md).
 
 ---
 
 ## Known limitations
 
 Listed because they are more useful to you than a clean README would be.
-Full list in [`docs/open-questions.md`](docs/open-questions.md).
+Full list in [`docs/design/open-questions.md`](docs/design/open-questions.md).
 
 - **Wheel speed limit is unmeasured.** `WHEEL_MAX_SPEED_MPS` is set above
   what the motors actually deliver. When the robot moves sideways, one wheel

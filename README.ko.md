@@ -45,8 +45,8 @@
 
 | 문서 | 내용 |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | 파일 구조, 파일별 책임, 파이프라인 흐름, **구현 상태** |
-| [`docs/algorithm.md`](docs/algorithm.md) | 궤적 추정 수식, 제어 루프, 검증된 성능 |
+| [`docs/design/architecture.md`](docs/design/architecture.md) | 파일 구조, 파일별 책임, 파이프라인 흐름, **구현 상태** |
+| [`docs/design/algorithm.md`](docs/design/algorithm.md) | 궤적 추정 수식, 제어 루프, 검증된 성능 |
 | [`CHANGELOG.md`](CHANGELOG.md) | 설계 변경 이력 — "왜 이렇게 됐지?" 싶을 때 |
 
 ### 오픈소스 공개용 (영문)
@@ -55,9 +55,9 @@
 
 | 문서 | 내용 |
 |---|---|
-| [bom.md](docs/bom.md) | **부품 명세** — 단가·구매처·대체 가능 여부 |
-| [getting-started.md](docs/getting-started.md) | **셋업 절차** — 의존성 → 플래시 → 캘리브레이션 → 방향 확인 → 실행 |
-| [results.md](docs/results.md) | **검증 결과** — 실측/시뮬 구분, 안 잰 것 목록 |
+| [bom.md](docs/guide/bom.md) | **부품 명세** — 단가·구매처·대체 가능 여부 |
+| [getting-started.md](docs/guide/getting-started.md) | **셋업 절차** — 의존성 → 플래시 → 캘리브레이션 → 방향 확인 → 실행 |
+| [results.md](docs/guide/results.md) | **검증 결과** — 실측/시뮬 구분, 안 잰 것 목록 |
 
 ### 설계 근거 (`docs/`)
 
@@ -65,17 +65,17 @@
 
 | 문서 | 내용 |
 |---|---|
-| [physics.md](docs/physics.md) | **물리 계산** — 운동모델·마찰·캐치반경·통 크기·항력·광학 |
-| [hardware.md](docs/hardware.md) | **하드웨어** — 부품 구성, 통 설계, 전원, 장착 규약, 구매 체크리스트 |
-| [vision-pipeline.md](docs/vision-pipeline.md) | **비전** — 데이터셋·라벨링·학습·Hailo 컴파일 |
-| [pico-control.md](docs/pico-control.md) | **피코** — 실시간 루프, 기구학, 오도메트리, 모터 제어 |
-| [protocol.md](docs/protocol.md) | **통신** — 파이5 ↔ 피코 프레임 계약 (양쪽이 참조) |
-| [open-questions.md](docs/open-questions.md) | **미결정 사항과 리스크** |
+| [physics.md](docs/design/physics.md) | **물리 계산** — 운동모델·마찰·캐치반경·통 크기·항력·광학 |
+| [hardware.md](docs/design/hardware.md) | **하드웨어** — 부품 구성, 통 설계, 전원, 장착 규약, 구매 체크리스트 |
+| [vision-pipeline.md](docs/design/vision-pipeline.md) | **비전** — 데이터셋·라벨링·학습·Hailo 컴파일 |
+| [pico-control.md](docs/design/pico-control.md) | **피코** — 실시간 루프, 기구학, 오도메트리, 모터 제어 |
+| [protocol.md](docs/design/protocol.md) | **통신** — 파이5 ↔ 피코 프레임 계약 (양쪽이 참조) |
+| [open-questions.md](docs/design/open-questions.md) | **미결정 사항과 리스크** |
 
 ### 작업 기록
 
-- [`pi5/TODO.md`](pi5/TODO.md) · [`pico/TODO.md`](pico/TODO.md) — 남은 실측·코드 항목
-- [`pi5/prep/TROUBLESHOOTING.md`](pi5/prep/TROUBLESHOOTING.md) — 데이터 수집 실기 작업 기록 (2026-08)
+- [`src/pi5/TODO.md`](src/pi5/TODO.md) · [`src/pico/TODO.md`](src/pico/TODO.md) — 남은 실측·코드 항목
+- [`src/pi5/prep/TROUBLESHOOTING.md`](src/pi5/prep/TROUBLESHOOTING.md) — 데이터 수집 실기 작업 기록 (2026-08)
 
 > **한 사실은 한 문서에만 두고 나머지는 링크한다.**
 > 변경 이력은 `CHANGELOG.md`에만 두고, 다른 문서는 **현재 상태만** 적는다.
@@ -123,7 +123,7 @@
 
 > 병목은 모터가 아니라 **바닥 마찰**이다. 모터는 16.3 m/s²를 낼 수 있는데 마찰 한계가
 > 2.45 m/s²다. `a = 0.5μg`에 질량이 없다는 것은 **통을 크게 만드는 비용이 사실상 0**이라는
-> 뜻이기도 하다 ([physics.md 2장](docs/physics.md#2-3륜-옴니의-힘-분배)).
+> 뜻이기도 하다 ([physics.md 2장](docs/design/physics.md#2-3륜-옴니의-힘-분배)).
 
 **비목표:** 여러 물체 동시 추적, 장애물 회피, 로봇 회전(θ) 제어, 캐치 성공/실패 자동 판정,
 통 비우기.
@@ -134,7 +134,7 @@
 |---|---|---|
 | 라즈베리파이 5 | Python | Hailo NPU 공식 SDK가 Python API 우선 지원. OpenCV/NumPy 생태계. 무거운 연산은 NPU가 처리하므로 Python 오버헤드가 병목이 아니다 |
 | 라즈베리파이 피코 | C (Pico SDK) — 기본 | PIO 엔코더 타이밍 정밀도, PID 루프 지터 최소화 |
-| 〃 | MicroPython — 같은 동작의 두 번째 판 ([`pico_micropython/`](pico_micropython/)) | 재빌드 없이 값을 바꿔가며 튜닝 |
+| 〃 | MicroPython — 같은 동작의 두 번째 판 ([`src/pico_micropython/`](src/pico_micropython/)) | 재빌드 없이 값을 바꿔가며 튜닝 |
 
 ## 현재 상태
 
@@ -145,4 +145,4 @@
 (최대속도·정지거리), **투척 영역 규약**이다. 궤적 추정의 합성 검증(착지 오차 중앙값 0.1~0.4 cm)은
 확정 렌즈와 다른 조건에서 돌아가 재확인이 필요하다.
 
-막혀 있는 지점과 우선순위는 [`docs/architecture.md` 5장](docs/architecture.md#5-지금-막혀-있는-지점).
+막혀 있는 지점과 우선순위는 [`docs/design/architecture.md` 5장](docs/design/architecture.md#5-지금-막혀-있는-지점).
