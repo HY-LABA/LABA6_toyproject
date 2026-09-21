@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+title: "Moving Trash Bin: a catching robot using gravity-constrained monocular trajectory estimation"
+message: "If you use this work, please cite it as below."
+type: software
+abstract: >-
+  An omnidirectional robot that catches thrown objects by predicting their
+  landing point from a single upward-facing camera. A single image cannot
+  recover depth, so the system uses gravity as a scale reference: the
+  trajectory that a constant 9.8 m/s^2 acceleration would have produced is
+  solved directly, which fixes the scale without knowing the object's size.
+  The estimator is a single 2N-by-6 linear least-squares solve with no
+  iteration, initial guess, or convergence failure, and it is corrected for
+  the motion of the camera, which rides on the robot.
+authors:
+  - family-names: Choi
+    given-names: Jeongmin
+    email: jungjeongmin@hanyang.ac.kr
+    affiliation: "Hanyang University, LABA"
+  - family-names: Jang
+    given-names: Inseon
+    affiliation: "Hanyang University, LABA"
+  - name: "HY-LABA Moving Trash Bin contributors"
+repository-code: "https://github.com/HY-LABA/LABA6_toyproject"
+license: MIT
+date-released: "2026-09-21"
+keywords:
+  - robotics
+  - monocular vision
+  - trajectory estimation
+  - omnidirectional robot
+  - object catching
+  - raspberry pi
+  - edge ai

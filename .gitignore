@@ -41,6 +41,11 @@ runs/
 *.png
 *.onnx
 
+# 단, 문서용 이미지(배선도·도표)는 저장소에 포함한다 — 위 *.png 규칙의 예외.
+!docs/images/*.png
+
 # test_accuracy.py 가 저장하는 투척 로그 (개인 실험 데이터)
 pi5/logs/
 pi5/run.log
+# utils.log() 는 실행 위치 기준으로 쓰므로 루트에도 생긴다
+/run.log
